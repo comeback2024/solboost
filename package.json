@@ -4,7 +4,7 @@
   "description": "A Telegram bot built with Node.js and Telegraf",
   "main": "solboost.js",
   "scripts": {
-    "start": "node solboost.js"
+    "start": "node solboost.mjs"
   },
   "dependencies": {
     "telegraf": "^4.4.0",
