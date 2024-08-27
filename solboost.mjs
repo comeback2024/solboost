@@ -154,7 +154,7 @@ bot.action('main_wallet', async (ctx) => {
         const balance = await connection.getBalance(publicKey);
         const solBalance = balance / LAMPORTS_PER_SOL;
 
-        let balanceMessage = `
+        const formattedMessage = `
 💵 Main Wallet \\(Solana\\)
 Address: \`${publicKey.toBase58()}\`
 Private Key: \`${bs58.encode(userWallet.secretKey)}\`
@@ -165,7 +165,7 @@ Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance 
         balanceMessageId = balanceMessage.message_id;
         lastKnownBalance = solBalance; // Store the initial balance
         
-} catch (error) {
+    } catch (error) {
         if (error.code === 429) {
             await handleTelegramError(error, ctx.chat.id);
         } else {
