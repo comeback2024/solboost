@@ -4,7 +4,7 @@ import { Telegraf, Markup } from 'telegraf';
 import dotenv from 'dotenv';
 import http from 'http';
 
-cconst PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end('This is a bot application, no web interface available.\n');
