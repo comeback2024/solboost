@@ -326,32 +326,46 @@ bot.action('track_peppermint', async (ctx) => {
 
 bot.action('refresh', async (ctx) => {
     try {
-        await ctx.answerCbQuery();
+        await ctx.answerCbQuery();  // Acknowledge the button click
+
         const userId = ctx.from.id;
 
+        // Check if the user has a wallet
         if (!userWallets[userId]) {
-            ctx.reply("You don't have a wallet yet. Please set up your main wallet first.");
+            await ctx.reply("You don't have a wallet yet. Please set up your main wallet first.");
             return;
         }
 
         const userWallet = userWallets[userId];
         const publicKey = userWallet.publicKey;
+
+        // Get the updated balance in SOL
         const balance = await connection.getBalance(publicKey);
         const solBalance = balance / LAMPORTS_PER_SOL;
 
-        ctx.reply(`
-💵 Main Wallet (Solana)
-Address: ${publicKey.toBase58()}
-Updated Balance: ${solBalance.toFixed(2)} SOL ($${(solBalance * 158).toFixed(2)} USD)
-⚠️ Note: A 13% fee is applied to profits
-        `);
-    } catch (error) {
-        if (error.code === 429) {
-            await handleTelegramError(error, ctx.chat.id);
+        // Only update if the balance has changed
+        if (solBalance !== lastKnownBalance) {
+            const updatedBalanceMessage = `Updated Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance * 158).toFixed(2).replace(/\./g, '\\.')} USD\\)`;
+
+            if (balanceMessageId) {
+                await ctx.telegram.editMessageText(ctx.chat.id, balanceMessageId, undefined, updatedBalanceMessage, {
+                    parse_mode: 'MarkdownV2'
+                });
+                lastKnownBalance = solBalance; // Update the last known balance
+            } else {
+                // If the balance message ID isn't found, send a new balance message
+                const newBalanceMessage = await ctx.reply(updatedBalanceMessage, { parse_mode: 'MarkdownV2' });
+                balanceMessageId = newBalanceMessage.message_id;
+                lastKnownBalance = solBalance; // Update the last known balance
+            }
         } else {
-            console.error('Error in refresh action:', error);
-            ctx.reply('An error occurred while refreshing. Please try again.');
+            // Log or handle if the balance has not changed
+            console.log('Balance has not changed. No update needed.');
         }
+
+    } catch (error) {
+        console.error('Error in refresh action:', error);
+        await ctx.reply('An error occurred while refreshing the balance. Please try again.');
     }
 });
 
