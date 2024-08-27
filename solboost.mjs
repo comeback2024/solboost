@@ -154,7 +154,7 @@ bot.action('main_wallet', async (ctx) => {
         const balance = await connection.getBalance(publicKey);
         const solBalance = balance / LAMPORTS_PER_SOL;
 
-        const formattedMessage = `
+        let balanceMessage = `
 💵 Main Wallet \\(Solana\\)
 Address: \`${publicKey.toBase58()}\`
 Private Key: \`${bs58.encode(userWallet.secretKey)}\`
