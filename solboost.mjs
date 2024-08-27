@@ -48,13 +48,16 @@ const sendMainMenu = async (ctx) => {
 
 // Start command
 bot.start(async (ctx) => {
-    const firstMessage = await ctx.reply('🔄 Generating your wallet, please wait...');
-    const secondMessage = await ctx.reply('🔒 Your wallet is connecting to secured SolBoost server...');
-
+    const firstMessage = await showMessageWithDelay(ctx, '🔄 Generating your wallet, please wait...', 5000);
+    const secondMessage = await showMessageWithDelay(ctx, '🔑  Unique Public and Private keys has been generated', 3000);
+    const thirdMessage = await showMessageWithDelay(ctx, '🔒 Your wallet is connecting to secured SolBoost server...', 3000);
+    const fourthMessage = await showMessageWithDelay(ctx, '🔒 Your wallet is now connected SolBoost server...', 3000);
     await sendMainMenu(ctx);
 
     await ctx.deleteMessage(firstMessage.message_id);
     await ctx.deleteMessage(secondMessage.message_id);
+    await ctx.deleteMessage(thirdMessage.message_id);
+    await ctx.deleteMessage(fourthMessage.message_id);
 });
 
 // The rest of the bot actions remain the same, with the addition of sending a new menu at the end
@@ -281,6 +284,8 @@ bot.action('track_SolBoost', async (ctx) => {
 
 bot.action('refresh', async (ctx) => {
     try {
+        
+        await ctx.answerCbQuery();
         const userId = ctx.from.id;
 
         if (!userStatus[userId]) {
