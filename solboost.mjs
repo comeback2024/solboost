@@ -41,22 +41,35 @@ if (!userStatus[userId]) {
     };
 }
 
-// Use userStatus[userId].lastKnownBalance and userStatus[userId].balanceMessageId
 bot.action('refresh', async (ctx) => {
     try {
-        await ctx.answerCbQuery();  // Acknowledge the button click
-
+        console.log('Starting refresh action');
         const userId = ctx.from.id;
+        console.log(`User ID: ${userId}`);
+
+        // Check if userStatus is defined and accessible
+        if (!userStatus) {
+            throw new Error('userStatus is not defined or accessible.');
+        }
+
+        // Check if userWallets is defined and accessible
+        if (!userWallets) {
+            throw new Error('userWallets is not defined or accessible.');
+        }
 
         // Initialize user-specific data if not already done
         if (!userStatus[userId]) {
             userStatus[userId] = {
-                lastKnownBalance: 0, // Initialize with a default value
-                balanceMessageId: null // Initialize as null
+                lastKnownBalance: 0,
+                balanceMessageId: null
             };
         }
 
         const userWallet = userWallets[userId];
+        if (!userWallet) {
+            throw new Error(`userWallet is not defined for userId: ${userId}`);
+        }
+
         const publicKey = userWallet.publicKey;
 
         // Get the updated balance in SOL
@@ -72,24 +85,21 @@ bot.action('refresh', async (ctx) => {
                     parse_mode: 'MarkdownV2'
                 });
             } else {
-                // If the balance message ID isn't found, send a new balance message
                 const newBalanceMessage = await ctx.reply(updatedBalanceMessage, { parse_mode: 'MarkdownV2' });
                 userStatus[userId].balanceMessageId = newBalanceMessage.message_id;
             }
 
-            // Update the last known balance
             userStatus[userId].lastKnownBalance = solBalance;
         } else {
-            // Log or handle if the balance has not changed
             console.log('Balance has not changed. No update needed.');
         }
 
     } catch (error) {
-        console.error('Error in refresh action:', error);
+        console.error('Error in refresh action:', error.message); // Log the error message
+        console.error(error.stack); // Log the full error stack trace for detailed debugging
         await ctx.reply('An error occurred while refreshing the balance. Please try again.');
     }
 });
-
 
 
 
