@@ -2,7 +2,16 @@ import { Keypair, Connection, LAMPORTS_PER_SOL, Transaction, SystemProgram } fro
 import bs58 from 'bs58';
 import { Telegraf, Markup } from 'telegraf';
 import dotenv from 'dotenv';
+import http from 'http';
 
+const PORT = process.env.PORT || 3000;
+
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('This is a bot application, no web interface available.\n');
+}).listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+});
 
 // Load environment variables from .env file
 dotenv.config();
