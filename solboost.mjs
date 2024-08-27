@@ -32,10 +32,6 @@ const connection = new Connection('https://api.mainnet-beta.solana.com');
 // Main wallet for receiving Solana (base58 private key)
 const mainWallet = Keypair.fromSecretKey(bs58.decode(MAIN_WALLET_PRIVATE_KEY));
 
-let userWallets = {}; // Store user wallets
-let userStatus = {}; // Store user status, including transfer status
-
-
 let userStatus = {}; // Assuming you already have this for storing user-specific data
 
 if (!userStatus[userId]) {
