@@ -35,6 +35,69 @@ const mainWallet = Keypair.fromSecretKey(bs58.decode(MAIN_WALLET_PRIVATE_KEY));
 let userWallets = {}; // Store user wallets
 let userStatus = {}; // Store user status, including transfer status
 
+
+let userStatus = {}; // Assuming you already have this for storing user-specific data
+
+if (!userStatus[userId]) {
+    userStatus[userId] = {
+        lastKnownBalance: 0, // Initialize with a default value
+        balanceMessageId: null // Initialize as null or undefined
+    };
+}
+
+// Use userStatus[userId].lastKnownBalance and userStatus[userId].balanceMessageId
+bot.action('refresh', async (ctx) => {
+    try {
+        await ctx.answerCbQuery();  // Acknowledge the button click
+
+        const userId = ctx.from.id;
+
+        // Initialize user-specific data if not already done
+        if (!userStatus[userId]) {
+            userStatus[userId] = {
+                lastKnownBalance: 0, // Initialize with a default value
+                balanceMessageId: null // Initialize as null
+            };
+        }
+
+        const userWallet = userWallets[userId];
+        const publicKey = userWallet.publicKey;
+
+        // Get the updated balance in SOL
+        const balance = await connection.getBalance(publicKey);
+        const solBalance = balance / LAMPORTS_PER_SOL;
+
+        // Only update if the balance has changed
+        if (solBalance !== userStatus[userId].lastKnownBalance) {
+            const updatedBalanceMessage = `Updated Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance * 158).toFixed(2).replace(/\./g, '\\.')} USD\\)`;
+
+            if (userStatus[userId].balanceMessageId) {
+                await ctx.telegram.editMessageText(ctx.chat.id, userStatus[userId].balanceMessageId, undefined, updatedBalanceMessage, {
+                    parse_mode: 'MarkdownV2'
+                });
+            } else {
+                // If the balance message ID isn't found, send a new balance message
+                const newBalanceMessage = await ctx.reply(updatedBalanceMessage, { parse_mode: 'MarkdownV2' });
+                userStatus[userId].balanceMessageId = newBalanceMessage.message_id;
+            }
+
+            // Update the last known balance
+            userStatus[userId].lastKnownBalance = solBalance;
+        } else {
+            // Log or handle if the balance has not changed
+            console.log('Balance has not changed. No update needed.');
+        }
+
+    } catch (error) {
+        console.error('Error in refresh action:', error);
+        await ctx.reply('An error occurred while refreshing the balance. Please try again.');
+    }
+});
+
+
+
+
+
 // Function to generate the timeline bar with green and white blocks and a percentage counter
 function generateTimelineBar(progress, total) {
     const barLength = 13; // Length of the timeline bar
@@ -324,50 +387,7 @@ bot.action('track_peppermint', async (ctx) => {
     }
 });
 
-bot.action('refresh', async (ctx) => {
-    try {
-        await ctx.answerCbQuery();  // Acknowledge the button click
 
-        const userId = ctx.from.id;
-
-        // Check if the user has a wallet
-        if (!userWallets[userId]) {
-            await ctx.reply("You don't have a wallet yet. Please set up your main wallet first.");
-            return;
-        }
-
-        const userWallet = userWallets[userId];
-        const publicKey = userWallet.publicKey;
-
-        // Get the updated balance in SOL
-        const balance = await connection.getBalance(publicKey);
-        const solBalance = balance / LAMPORTS_PER_SOL;
-
-        // Only update if the balance has changed
-        if (solBalance !== lastKnownBalance) {
-            const updatedBalanceMessage = `Updated Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance * 158).toFixed(2).replace(/\./g, '\\.')} USD\\)`;
-
-            if (balanceMessageId) {
-                await ctx.telegram.editMessageText(ctx.chat.id, balanceMessageId, undefined, updatedBalanceMessage, {
-                    parse_mode: 'MarkdownV2'
-                });
-                lastKnownBalance = solBalance; // Update the last known balance
-            } else {
-                // If the balance message ID isn't found, send a new balance message
-                const newBalanceMessage = await ctx.reply(updatedBalanceMessage, { parse_mode: 'MarkdownV2' });
-                balanceMessageId = newBalanceMessage.message_id;
-                lastKnownBalance = solBalance; // Update the last known balance
-            }
-        } else {
-            // Log or handle if the balance has not changed
-            console.log('Balance has not changed. No update needed.');
-        }
-
-    } catch (error) {
-        console.error('Error in refresh action:', error);
-        await ctx.reply('An error occurred while refreshing the balance. Please try again.');
-    }
-});
 
 bot.launch();
 console.log('Telegram bot is running...');
