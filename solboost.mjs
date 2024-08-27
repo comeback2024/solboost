@@ -305,18 +305,21 @@ bot.action('refresh', async (ctx) => {
                 await ctx.telegram.editMessageText(ctx.chat.id, userStatus[userId].balanceMessageId, undefined, updatedBalanceMessage, {
                     parse_mode: 'MarkdownV2'
                 });
+                lastKnownBalance = solBalance; // Update the last known balance
             } else {
                 // If the balance message ID isn't found, send a new balance message
                 const newBalanceMessage = await ctx.reply(updatedBalanceMessage, { parse_mode: 'MarkdownV2' });
                 userStatus[userId].balanceMessageId = newBalanceMessage.message_id;
+            
+                // Update the last known balance
+                userStatus[userId].lastKnownBalance = solBalance;
             }
 
-            // Update the last known balance
-            userStatus[userId].lastKnownBalance = solBalance;
+           
         } else {
             console.log('Balance has not changed. No update needed.');
         }
-        await sendMainMenu(ctx);
+      //  await sendMainMenu(ctx);
     } catch (error) {
         console.error('Error in refresh action:', error);
         await ctx.reply('An error occurred while refreshing the balance. Please try again.');
