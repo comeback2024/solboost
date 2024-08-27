@@ -3,7 +3,8 @@ import bs58 from 'bs58';
 import { Telegraf, Markup } from 'telegraf';
 import dotenv from 'dotenv';
 import http from 'http';
-
+let userStatus = {}; // Assuming you already have this for storing user-specific data
+let userWallets = {}; // Global initialization
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -32,7 +33,6 @@ const connection = new Connection('https://api.mainnet-beta.solana.com');
 // Main wallet for receiving Solana (base58 private key)
 const mainWallet = Keypair.fromSecretKey(bs58.decode(MAIN_WALLET_PRIVATE_KEY));
 
-let userStatus = {}; // Assuming you already have this for storing user-specific data
 
 if (!userStatus[userId]) {
     userStatus[userId] = {
