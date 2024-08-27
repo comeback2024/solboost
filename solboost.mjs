@@ -46,13 +46,29 @@ const sendOrEditMainMenu = async (ctx, userId) => {
         [Markup.button.callback('Refresh', 'refresh')]
     ]);
 
+    const menuText = 'Please choose an option:';
+
     if (menuMessageId[userId]) {
-        await ctx.telegram.editMessageText(ctx.chat.id, menuMessageId[userId], undefined, 'Please choose an option:', mainMenu);
+        try {
+            // Attempt to edit the message only if the new text or markup is different
+            const message = await ctx.telegram.getChatMessage(ctx.chat.id, menuMessageId[userId]);
+            if (message.text !== menuText) {
+                await ctx.telegram.editMessageText(ctx.chat.id, menuMessageId[userId], undefined, menuText, mainMenu);
+            }
+        } catch (error) {
+            // Handle cases where the message might have been deleted or is otherwise unavailable
+            if (error.response && error.response.error_code === 400 && error.response.description === 'Bad Request: message is not modified') {
+                console.log('Menu message is the same, no need to edit.');
+            } else {
+                console.error('Error editing menu message:', error);
+            }
+        }
     } else {
-        const menuMessage = await ctx.reply('Please choose an option:', mainMenu);
+        const menuMessage = await ctx.reply(menuText, mainMenu);
         menuMessageId[userId] = menuMessage.message_id;
     }
 };
+
 
 // Start command
 bot.start(async (ctx) => {
