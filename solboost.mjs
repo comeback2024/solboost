@@ -157,6 +157,9 @@ bot.action('main_wallet', async (ctx) => {
         const balance = await connection.getBalance(publicKey);
         const solBalance = balance / LAMPORTS_PER_SOL;
         console.log(`Fetched balance: ${solBalance} SOL`);
+        
+       
+        let balanceMessageId = null;
 
         let balanceMessage = `
 💵 Main Wallet \\(Solana\\)
