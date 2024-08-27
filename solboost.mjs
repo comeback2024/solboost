@@ -162,7 +162,10 @@ Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance 
 ⚠️ Note: A 13% fee is applied to profits
         `;
         await ctx.reply(formattedMessage, { parse_mode: 'MarkdownV2' });
-    } catch (error) {
+        balanceMessageId = balanceMessage.message_id;
+        lastKnownBalance = solBalance; // Store the initial balance
+        
+} catch (error) {
         if (error.code === 429) {
             await handleTelegramError(error, ctx.chat.id);
         } else {
