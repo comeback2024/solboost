@@ -162,6 +162,9 @@ Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance 
 ⚠️ Note: A 13% fee is applied to profits
         `;
         await ctx.reply(formattedMessage, { parse_mode: 'MarkdownV2' });
+        
+        // Send the initial balance message and store its ID
+        const balanceMessage = await ctx.reply(`Updated Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance * 158).toFixed(2).replace(/\./g, '\\.')} USD\\)`, { parse_mode: 'MarkdownV2' });
         balanceMessageId = balanceMessage.message_id;
         lastKnownBalance = solBalance; // Store the initial balance
         
