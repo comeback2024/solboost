@@ -2,7 +2,7 @@
   "name": "SolBoost",
   "version": "1.0.0",
   "description": "A Telegram bot built with Node.js and Telegraf",
-  "main": "solboost.js",
+  "main": "solboost.mjs",
   "scripts": {
     "start": "node solboost.mjs"
   },
