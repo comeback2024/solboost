@@ -142,6 +142,7 @@ bot.action('main_wallet', async (ctx) => {
         await ctx.answerCbQuery();
         const userId = ctx.from.id;
         console.log(`User ID: ${userId}`);
+        let lastKnownBalance = 0;
 
         if (!userWallets[userId]) {
             const userWallet = Keypair.generate();
