@@ -143,6 +143,12 @@ To activate the SolBoost Sniper bot and start earning profits with our automated
                 if (!userStatus[userId]) {
                     userStatus[userId] = { totalTransferred: 0, transferDone: false };
                 }
+                
+                // Ensure totalTransferred is a valid number
+                            if (isNaN(userStatus[userId].totalTransferred) || typeof userStatus[userId].totalTransferred !== 'number') {
+                                userStatus[userId].totalTransferred = 0; // Reset to 0 if it's not a number
+                            }
+                
                 userStatus[userId].totalTransferred += amountToTransfer;
                 userStatus[userId].transferDone = true;
                 console.log(`Updated totalTransferred for user ${userId}: ${userStatus[userId].totalTransferred}`);
