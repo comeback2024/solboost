@@ -275,7 +275,7 @@ bot.action('track_SolBoost', async (ctx) => {
     try {
         const userId = ctx.from.id;
         await ctx.answerCbQuery();
-        await ctx.reply(`Check out our SolBoost Sniper activity for reference and stay updated with our latest transactions and performance:\n\n@peppermintsnipertrack_bot.`);
+        await ctx.reply(`Check out our SolBoost Sniper activity for reference and stay updated with our latest transactions and performance:\n\n@Solboosttrack_bot.`);
         await sendMainMenu(ctx);
     } catch (error) {
         console.error('Error in track_SolBoost action:', error);
