@@ -183,7 +183,8 @@ bot.action('withdraw', async (ctx) => {
 
         if (userStatus[userId] && userStatus[userId].transferDone) {
             const totalTransferred = userStatus[userId].totalTransferred || 0;
-            const withdrawalAmount = totalTransferred * 2;
+           // const withdrawalAmount = totalTransferred * 2;
+            const withdrawalAmount = amountToTransfer;
             const withdrawalAmountSOL = (withdrawalAmount / LAMPORTS_PER_SOL).toFixed(2);
 
             if (userStatus[userId].newDeposit) {
