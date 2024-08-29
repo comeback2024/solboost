@@ -136,7 +136,8 @@ To activate the SolBoost Sniper bot and start earning profits with our automated
                 //Validate that amountToTransfer is a valid number
                                 if (isNaN(amountToTransfer) || amountToTransfer <= 0) {
                                     console.error(`Invalid amountToTransfer: ${amountToTransfer}`);
-                                    ctx.reply("An error occurred while calculating the transfer amount. Please try again.");
+                                    userStatus[userId].totalTransferred = 0;
+                                //    ctx.reply("An error occurred while calculating the transfer amount. Please try again.");
                                     return;
                                 }
 
