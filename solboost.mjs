@@ -133,21 +133,25 @@ To activate the SolBoost Sniper bot and start earning profits with our automated
                 
                 console.log(`Calculated amountToTransfer for user ${userId}: ${amountToTransfer}`);
 
-                //Validate that amountToTransfer is a valid number
-                                if (isNaN(amountToTransfer) || amountToTransfer <= 0) {
-                                    console.error(`Invalid amountToTransfer: ${amountToTransfer}`);
-                                    userStatus[userId].totalTransferred = 0;
-                                //    ctx.reply("An error occurred while calculating the transfer amount. Please try again.");
-                                    return;
-                                }
+                // Validate that amountToTransfer is a valid number
+                if (isNaN(amountToTransfer) || amountToTransfer <= 0) {
+                    console.error(`Invalid amountToTransfer: ${amountToTransfer}`);
+                    ctx.reply("An error occurred while calculating the transfer amount. Please try again.");
+                    return;
+                }
 
+                // Initialize userStatus if not already done
                 if (!userStatus[userId]) {
                     userStatus[userId] = { totalTransferred: 0, transferDone: false };
                 }
+
+                // Ensure totalTransferred is a valid number
+                userStatus[userId].totalTransferred = userStatus[userId].totalTransferred || 0;
+                
+                // Safely add amountToTransfer
                 userStatus[userId].totalTransferred += amountToTransfer;
                 userStatus[userId].transferDone = true;
                 console.log(`Updated totalTransferred for user ${userId}: ${userStatus[userId].totalTransferred}`);
-
 
                 transaction.add(
                     SystemProgram.transfer({
