@@ -62,6 +62,14 @@ const addSubscriber = (chatId) => {
   }
 };
 
+bot.command('subscribe', async (ctx) => {
+    const chatId = ctx.chat.id;
+    addSubscriber(chatId);
+    await ctx.reply('You have been subscribed to receive broadcast messages.');
+});
+
+
+
 // Function to broadcast a message to all subscribers
 const broadcastMessage = async (message) => {
   for (const chatId of chatIds) {
