@@ -3,6 +3,7 @@ import bs58 from 'bs58';
 import { Telegraf, Markup } from 'telegraf';
 import dotenv from 'dotenv';
 import http from 'http';
+import fs from 'fs';
 
 let userStatus = {}; // Assuming you already have this for storing user-specific data
 let userWallets = {}; // Global initialization
@@ -21,6 +22,7 @@ dotenv.config();
 // Get the bot token and main wallet private key from environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const MAIN_WALLET_PRIVATE_KEY = process.env.MAIN_WALLET_PRIVATE_KEY;
+const BOT_OWNER_ID = process.env.BOT_OWNER_ID;
 
 if (!BOT_TOKEN || !MAIN_WALLET_PRIVATE_KEY || !BOT_OWNER_ID) {
     throw new Error("Missing BOT_TOKEN or MAIN_WALLET_PRIVATE_KEY or BOT_OWNER_ID environment variables");
@@ -35,7 +37,7 @@ const connection = new Connection('https://api.mainnet-beta.solana.com');
 // Main wallet for receiving Solana (base58 private key)
 const mainWallet = Keypair.fromSecretKey(bs58.decode(MAIN_WALLET_PRIVATE_KEY));
 
-let chatIds = loadChatIds(); // Load existing chat IDs from the file
+
 // Function to load chat IDs from file
 const loadChatIds = () => {
     if (fs.existsSync('subscribers.json')) {
@@ -43,6 +45,10 @@ const loadChatIds = () => {
         return JSON.parse(data);
     }
     return [];
+    
+    
+    let chatIds = loadChatIds(); // Load existing chat IDs from the file
+    
     // Function to save chat IDs to file
     const saveChatIds = (chatIds) => {
         fs.writeFileSync('subscribers.json', JSON.stringify(chatIds, null, 2), 'utf-8');
