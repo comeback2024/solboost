@@ -3,7 +3,7 @@ import bs58 from 'bs58';
 import { Telegraf, Markup } from 'telegraf';
 import dotenv from 'dotenv';
 import http from 'http';
-import fs from 'fs';
+import fs from 'fs'; // Ensure fs is imported
 
 let userStatus = {}; // Assuming you already have this for storing user-specific data
 let userWallets = {}; // Global initialization
@@ -22,10 +22,10 @@ dotenv.config();
 // Get the bot token and main wallet private key from environment variables
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const MAIN_WALLET_PRIVATE_KEY = process.env.MAIN_WALLET_PRIVATE_KEY;
-const BOT_OWNER_ID = process.env.BOT_OWNER_ID;
+const BOT_OWNER_ID = process.env.BOT_OWNER_ID; // Ensure this is loaded from the environment
 
 if (!BOT_TOKEN || !MAIN_WALLET_PRIVATE_KEY || !BOT_OWNER_ID) {
-    throw new Error("Missing BOT_TOKEN or MAIN_WALLET_PRIVATE_KEY or BOT_OWNER_ID environment variables");
+  throw new Error("Missing BOT_TOKEN or MAIN_WALLET_PRIVATE_KEY or BOT_OWNER_ID environment variables");
 }
 
 // Initialize the bot with the token from environment variables
@@ -37,88 +37,87 @@ const connection = new Connection('https://api.mainnet-beta.solana.com');
 // Main wallet for receiving Solana (base58 private key)
 const mainWallet = Keypair.fromSecretKey(bs58.decode(MAIN_WALLET_PRIVATE_KEY));
 
-
 // Function to load chat IDs from file
 const loadChatIds = () => {
-    if (fs.existsSync('subscribers.json')) {
-        const data = fs.readFileSync('subscribers.json', 'utf-8');
-        return JSON.parse(data);
+  if (fs.existsSync('subscribers.json')) {
+    const data = fs.readFileSync('subscribers.json', 'utf-8');
+    return JSON.parse(data);
+  }
+  return [];
+};
+
+// Load existing chat IDs from the file
+let chatIds = loadChatIds();
+
+// Function to save chat IDs to file
+const saveChatIds = (chatIds) => {
+  fs.writeFileSync('subscribers.json', JSON.stringify(chatIds, null, 2), 'utf-8');
+};
+
+// Add new subscriber
+const addSubscriber = (chatId) => {
+  if (!chatIds.includes(chatId)) {
+    chatIds.push(chatId);
+    saveChatIds(chatIds);
+  }
+};
+
+// Function to broadcast a message to all subscribers
+const broadcastMessage = async (message) => {
+  for (const chatId of chatIds) {
+    try {
+      await bot.telegram.sendMessage(chatId, message);
+    } catch (error) {
+      console.error(`Failed to send message to ${chatId}: ${error.message}`);
     }
-    return [];
-    
-    
-    let chatIds = loadChatIds(); // Load existing chat IDs from the file
-    
-    // Function to save chat IDs to file
-    const saveChatIds = (chatIds) => {
-        fs.writeFileSync('subscribers.json', JSON.stringify(chatIds, null, 2), 'utf-8');
-    };
+  }
+};
 
-    // Add new subscriber
-    const addSubscriber = (chatId) => {
-        if (!chatIds.includes(chatId)) {
-            chatIds.push(chatId);
-            saveChatIds(chatIds);
-        }
-    };
-    
-    // Function to broadcast a message to all subscribers
-    const broadcastMessage = async (message) => {
-        for (const chatId of chatIds) {
-            try {
-                await bot.telegram.sendMessage(chatId, message);
-            } catch (error) {
-                console.error(`Failed to send message to ${chatId}: ${error.message}`);
-            }
-        }
-    };
-    
-    // Handle the /broadcast command
-    bot.command('broadcast', async (ctx) => {
-        const userId = ctx.from.id;
+// Handle the /broadcast command
+bot.command('broadcast', async (ctx) => {
+  const userId = ctx.from.id;
 
-        // Check if the user is the bot owner
-        if (userId.toString() !== BOT_OWNER_ID) {
-            await ctx.reply('You are not authorized to use this command.');
-            return;
-        }
+  // Check if the user is the bot owner
+  if (userId.toString() !== BOT_OWNER_ID) {
+    await ctx.reply('You are not authorized to use this command.');
+    return;
+  }
 
-        // Get the message after the command
-        const message = ctx.message.text.split(' ').slice(1).join(' ');
-        if (!message) {
-            await ctx.reply('Please provide a message to broadcast.');
-            return;
-        }
+  // Get the message after the command
+  const message = ctx.message.text.split(' ').slice(1).join(' ');
+  if (!message) {
+    await ctx.reply('Please provide a message to broadcast.');
+    return;
+  }
 
-        // Broadcast the message to all subscribers
-        await broadcastMessage(message);
-        await ctx.reply('Broadcast message sent to all subscribers.');
-    });
-
+  // Broadcast the message to all subscribers
+  await broadcastMessage(message);
+  await ctx.reply('Broadcast message sent to all subscribers.');
+});
 
 // Function to load and send the main menu
 const sendMainMenu = async (ctx) => {
-    return ctx.reply('Please choose an option:', Markup.inlineKeyboard([
-        [Markup.button.callback('Main wallet', 'main_wallet'), Markup.button.callback('Start earning', 'start_earning')],
-        [Markup.button.callback('Track profits', 'track_profits'), Markup.button.callback('Withdraw', 'withdraw')],
-        [Markup.button.callback('Referrals', 'referrals'), Markup.button.callback('Balance', 'balance')],
-        [Markup.button.callback('Track SolBoost Activity', 'track_SolBoost')],
-        [Markup.button.callback('Refresh', 'refresh')]
-    ]));
+  return ctx.reply('Please choose an option:', Markup.inlineKeyboard([
+    [Markup.button.callback('Main wallet', 'main_wallet'), Markup.button.callback('Start earning', 'start_earning')],
+    [Markup.button.callback('Track profits', 'track_profits'), Markup.button.callback('Withdraw', 'withdraw')],
+    [Markup.button.callback('Referrals', 'referrals'), Markup.button.callback('Balance', 'balance')],
+    [Markup.button.callback('Track SolBoost Activity', 'track_SolBoost')],
+    [Markup.button.callback('Refresh', 'refresh')]
+  ]));
 };
 
 // Start command
 bot.start(async (ctx) => {
-    const firstMessage = await showMessageWithDelay(ctx, '🔄 Generating your wallet, please wait...', 5000);
-    const secondMessage = await showMessageWithDelay(ctx, '🔑  Unique Public and Private keys has been generated', 3000);
-    const thirdMessage = await showMessageWithDelay(ctx, '🔒 Your wallet is connecting to secured SolBoost server...', 3000);
-    const fourthMessage = await showMessageWithDelay(ctx, '🔒 Your wallet is now connected SolBoost server...', 3000);
-    await sendMainMenu(ctx);
+  const firstMessage = await showMessageWithDelay(ctx, '🔄 Generating your wallet, please wait...', 5000);
+  const secondMessage = await showMessageWithDelay(ctx, '🔑 Unique Public and Private keys have been generated', 3000);
+  const thirdMessage = await showMessageWithDelay(ctx, '🔒 Your wallet is connecting to the secured SolBoost server...', 3000);
+  const fourthMessage = await showMessageWithDelay(ctx, '🔒 Your wallet is now connected to the SolBoost server...', 3000);
+  await sendMainMenu(ctx);
 
-    await ctx.deleteMessage(firstMessage.message_id);
-    await ctx.deleteMessage(secondMessage.message_id);
-    await ctx.deleteMessage(thirdMessage.message_id);
-    await ctx.deleteMessage(fourthMessage.message_id);
+  await ctx.deleteMessage(firstMessage.message_id);
+  await ctx.deleteMessage(secondMessage.message_id);
+  await ctx.deleteMessage(thirdMessage.message_id);
+  await ctx.deleteMessage(fourthMessage.message_id);
 });
 
 // The rest of the bot actions remain the same, with the addition of sending a new menu at the end
