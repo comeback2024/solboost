@@ -128,7 +128,7 @@ const sendDepositReminders = async () => {
         const reminderMessage = `
 <b>Reminder:</b>\n\n
 👋 Hello, <b>${userName}</b>!\n\n
-🚀 <b>Kickstart Your Earnings Today!</b>\n\n
+🚀 <b>🚀 Kickstart Your Earnings Today! Just type /start to begin!</b>\n\n
 You haven't deposited any funds yet. 🌟 Deposit at least <b>0.5 SOL</b> now and let our automated trading system start working to grow your investment!\n\n
 💸 <b>Your journey to profits begins with a simple deposit.</b> Act now and start growing your investment!\n\n
 <b>Your wallet address:</b> <code>${userWalletAddress}</code>
