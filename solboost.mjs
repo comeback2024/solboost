@@ -1,130 +1,1415 @@
-import { Keypair, Connection, LAMPORTS_PER_SOL, Transaction, SystemProgram } from '@solana/web3.js';
+// Import necessary modules
+import pkg from 'pg';
+import { Keypair, Connection, LAMPORTS_PER_SOL, Transaction, SystemProgram, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { Telegraf, Markup } from 'telegraf';
 import dotenv from 'dotenv';
 import http from 'http';
-import fs from 'fs'; // Ensure fs is imported
+import winston from 'winston';
+import schedule from 'node-schedule';
 
-let userStatus = {}; // Assuming you already have this for storing user-specific data
-let userWallets = {}; // Global initialization
-
-const PORT = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('This is a bot application, no web interface available.\n');
-}).listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-});
-
-// Load environment variables from .env file
+// Load environment variables
 dotenv.config();
 
-// Get the bot token and main wallet private key from environment variables
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const MAIN_WALLET_PRIVATE_KEY = process.env.MAIN_WALLET_PRIVATE_KEY;
-const BOT_OWNER_ID = process.env.BOT_OWNER_ID; // Ensure this is loaded from the environment
-const RPC_URL = process.env.RPC_URL;
+// Constants
+const { Pool } = pkg;
+const MAX_RETRIES = 5;
+const INITIAL_BACKOFF = 1000; // 1 second
 
-if (!BOT_TOKEN || !MAIN_WALLET_PRIVATE_KEY || !BOT_OWNER_ID) {
-  throw new Error("Missing BOT_TOKEN or MAIN_WALLET_PRIVATE_KEY or BOT_OWNER_ID environment variables");
+// Environment variables
+const { BOT_TOKEN, MAIN_WALLET_PRIVATE_KEY, BOT_OWNER_ID, DATABASE_URL } = process.env;
+const RPC_URL = process.env.RPC_URL || 'https://api.mainnet-beta.solana.com';
+
+
+// Validation
+if (!BOT_TOKEN || !MAIN_WALLET_PRIVATE_KEY || !BOT_OWNER_ID || !DATABASE_URL || !RPC_URL) {
+  throw new Error("Missing required environment variables. Check your .env file.");
 }
 
-// Initialize the bot with the token from environment variables
+// Initialize Telegram bot
 const bot = new Telegraf(BOT_TOKEN);
+bot.use(Telegraf.log());
 
-// Assuming you have a connection to Solana mainnet
-const connection = new Connection(RPC_URL);
-
-// Main wallet for receiving Solana (base58 private key)
+// Main wallet for receiving Solana
 const mainWallet = Keypair.fromSecretKey(bs58.decode(MAIN_WALLET_PRIVATE_KEY));
 
-// Function to load chat IDs from file
-const loadChatIds = () => {
-  try {
-    if (fs.existsSync('subscribers.json')) {
-      const data = fs.readFileSync('subscribers.json', 'utf-8');
-      return JSON.parse(data);
-    }
-  } catch (error) {
-    console.error('Error reading subscribers.json:', error);
-  }
-  return [];
-};
-
-// Function to save chat IDs to file
-const saveChatIds = (chatIds) => {
-  try {
-    fs.writeFileSync('subscribers.json', JSON.stringify(chatIds, null, 2), 'utf-8');
-    console.log('Subscribers saved successfully.');
-  } catch (error) {
-    console.error('Error writing to subscribers.json:', error);
-  }
-};
-
-// Load existing chat IDs from the file
-let chatIds = loadChatIds();
-
-// Add new subscriber
-const addSubscriber = (chatId) => {
-  if (!chatIds.includes(chatId)) {
-    chatIds.push(chatId);
-    console.log(`Adding new subscriber: ${chatId}`);
-    saveChatIds(chatIds);
-  } else {
-    console.log(`Subscriber ${chatId} already exists.`);
-  }
-};
-
-bot.command('subscribe', async (ctx) => {
-  const chatId = ctx.chat.id;
-  addSubscriber(chatId);
-  await ctx.reply('You have been subscribed to receive broadcast messages.');
+// Database connection
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
 });
 
-// Function to broadcast a message to all subscribers
-const broadcastMessage = async (message) => {
-  console.log(`Starting broadcast to ${chatIds.length} subscribers with message: "${message}"`);
+// Logger setup
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'bot.log' }),
+  ],
+});
 
-  for (const chatId of chatIds) {
+// Error handling
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Utility functions
+const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+const retryOperation = async (operation, maxRetries = MAX_RETRIES, initialBackoff = INITIAL_BACKOFF) => {
+  let retries = 0;
+  while (retries < maxRetries) {
     try {
-      console.log(`Attempting to send message to ${chatId}...`);
-      await bot.telegram.sendMessage(chatId, message);
-      console.log(`Successfully sent message to ${chatId}`);
+      return await operation();
     } catch (error) {
-      console.error(`Failed to send message to ${chatId}: ${error.message}`);
+      if (error.message.includes('429 Too Many Requests') || error.message.includes('max usage reached')) {
+        retries++;
+        const delay = initialBackoff * Math.pow(2, retries);
+        console.log(`Rate limited. Retrying in ${delay}ms...`);
+        await wait(delay);
+      } else {
+        throw error;
+      }
     }
   }
+  throw new Error('Operation failed after max retries');
+};
 
-  console.log('Broadcast finished.');
+const safeEditMessage = async (ctx, text, extra = {}) => {
+  try {
+    await ctx.editMessageText(text, extra);
+  } catch (error) {
+    if (error.description !== "Bad Request: message is not modified") {
+      console.error('Error updating message:', error);
+    }
+  }
+};
+
+const generateReferralCode = () => {
+  return Math.random().toString(36).substring(2, 8).toUpperCase();
+};
+
+const isBotOwner = (userId) => {
+  return userId.toString() === BOT_OWNER_ID;
+};
+
+const calculateBalance = (initialAmount, depositDate) => {
+  const now = new Date();
+  const depositTime = new Date(depositDate);
+  const elapsedDays = (now - depositTime) / (1000 * 60 * 60 * 24);
+  const doublingPeriods = Math.floor(elapsedDays / 10);
+  const remainingDays = elapsedDays % 10;
+  
+  let balance = initialAmount * Math.pow(2, doublingPeriods);
+  balance += (balance / 10) * (remainingDays / 10);
+  
+  return balance;
+};
+
+// Helper functions
+
+
+const safeAnswerCallbackQuery = async (ctx, text = '') => {
+  try {
+    await ctx.answerCbQuery(text);
+  } catch (error) {
+    if (error.description.includes('query is too old')) {
+      console.log('Callback query expired:', error.description);
+    } else {
+      throw error;
+    }
+  }
 };
 
 
 
-const sendDepositReminders = async () => {
-  console.log('Initiating scheduled reminder check...');
-  console.log('Sending deposit reminders...');
 
-  for (const chatId of chatIds) {
-    try {
-      const user = userStatus[chatId];
+//deposit menu
+const showDepositMenu = async (ctx) => {
+  const chatId = ctx.from.id;
+  console.log(`Showing deposit menu for user ${chatId}`);
 
-      // If user data does not exist, initialize it
-      if (!userStatus[chatId]) {
-        userStatus[chatId] = {
-          totalTransferred: 0,
-          transferDone: false,
-        };
+  try {
+    const query = 'SELECT public_key FROM users WHERE chat_id = $1';
+    const result = await pool.query(query, [chatId]);
+
+    if (result.rows.length > 0) {
+      const { public_key: publicKeyString } = result.rows[0];
+      const publicKey = new PublicKey(publicKeyString);
+
+      const depositMessage = `
+📥 Deposit SOL
+Your deposit address (click to copy):
+<code>${publicKey.toBase58()}</code>
+
+📝 Note: Please only send SOL to this address. Sending other tokens may result in permanent loss.
+
+Minimum deposit: 0.5 SOL
+      `;
+
+      const depositKeyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')],
+        [Markup.button.callback('Deposit History', 'deposit_history')]
+      ]);
+
+      await ctx.reply(depositMessage, {
+        parse_mode: 'HTML',
+        ...depositKeyboard
+      });
+    } else {
+      await ctx.reply('User not found. Please use /start to register.');
+    }
+  } catch (error) {
+    console.error('Error in deposit option:', error);
+    await ctx.reply('An error occurred while fetching your deposit address. Please try again.');
+  }
+};
+
+
+
+
+
+
+// Database functions
+const getUser = async (chatId) => {
+  const client = await pool.connect();
+  try {
+    const query = 'SELECT *, deposit_amount::float, deposit_date::timestamp FROM users WHERE chat_id = $1';
+    const result = await client.query(query, [chatId]);
+    return result.rows[0];
+  } catch (error) {
+    console.error('Error fetching user:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const getAllUsers = async () => {
+  const client = await pool.connect();
+  try {
+    const query = 'SELECT chat_id, first_name, public_key FROM users';
+    const result = await client.query(query);
+    return result.rows;
+  } catch (error) {
+    console.error('Error fetching users:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const registerUser = async (chatId, publicKey, privateKey, firstName) => {
+  const client = await pool.connect();
+  try {
+    const referralCode = generateReferralCode();
+    const query = `
+      INSERT INTO users (chat_id, public_key, private_key, first_name, referral_code)
+      VALUES ($1, $2, $3, $4, $5)
+      ON CONFLICT (chat_id) DO UPDATE
+      SET public_key = EXCLUDED.public_key,
+          private_key = EXCLUDED.private_key,
+          first_name = EXCLUDED.first_name,
+          last_activity = CURRENT_TIMESTAMP
+      RETURNING *;
+    `;
+    const result = await client.query(query, [chatId, publicKey, privateKey, firstName, referralCode]);
+    console.log('User registered/updated:', result.rows[0]);
+    return result.rows[0];
+  } catch (error) {
+    console.error('Error registering user:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const updateUserActivity = async (chatId) => {
+  const client = await pool.connect();
+  try {
+    const query = 'UPDATE users SET last_activity = CURRENT_TIMESTAMP WHERE chat_id = $1';
+    await client.query(query, [chatId]);
+    console.log(`Updated activity for user ${chatId}`);
+  } catch (error) {
+    console.error('Error updating user activity:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const updateUserFirstName = async (chatId, firstName) => {
+  const client = await pool.connect();
+  try {
+    const query = `
+      UPDATE users
+      SET first_name = $2, last_activity = CURRENT_TIMESTAMP
+      WHERE chat_id = $1
+      RETURNING *;
+    `;
+    const result = await client.query(query, [chatId, firstName]);
+    console.log('User first name updated:', result.rows[0]);
+    return result.rows[0];
+  } catch (error) {
+    console.error('Error updating user first name:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const updateUserDeposit = async (chatId, amount) => {
+  const client = await pool.connect();
+  try {
+    const query = 'UPDATE users SET deposit_amount = $2, deposit_date = CURRENT_TIMESTAMP WHERE chat_id = $1 RETURNING *';
+    const result = await client.query(query, [chatId, amount]);
+    return result.rows[0];
+  } catch (error) {
+    console.error('Error updating user deposit:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const recordTransaction = async (userId, type, amount, txSignature = null) => {
+  const client = await pool.connect();
+  try {
+    const query = `
+      WITH inserted_transaction AS (
+        INSERT INTO transactions (user_id, transaction_type, amount, tx_signature)
+        VALUES ($1, $2, $3, $4)
+        RETURNING *
+      )
+      SELECT
+        t.*,
+        u.public_key,
+        u.first_name,
+        u.deposit_amount,
+        u.withdrawal_amount,
+        u.status AS user_status,
+        u.referral_code
+      FROM inserted_transaction t
+      JOIN users u ON t.user_id = u.chat_id;
+    `;
+    const result = await client.query(query, [userId, type, amount, txSignature]);
+    console.log(`Transaction recorded:`, result.rows[0]);
+    return result.rows[0];
+  } catch (error) {
+    console.error('Error recording transaction:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+// Keyboard and menu functions
+const getMainMenuKeyboard = () => {
+  return Markup.keyboard([
+    ['Main wallet', 'Start earning'],
+    ['Deposit', 'Withdraw'],
+    ['Referrals', 'Balance'],
+    ['Docs', 'Refresh'],
+    ['💡 How it works']
+  ]).resize();
+};
+
+const sendMainMenu = async (ctx) => {
+  return ctx.reply('Please choose an option:', getMainMenuKeyboard());
+};
+
+// Bot commands
+bot.command('start', async (ctx) => {
+  const chatId = ctx.from.id;
+  const firstName = ctx.from.first_name || 'User';
+  const startPayload = ctx.message.text.split(' ')[1]; // This will get any text after /start
+
+  try {
+    let user = await getUser(chatId);
+    if (!user) {
+      const wallet = Keypair.generate();
+      const publicKey = wallet.publicKey.toString();
+      const privateKey = bs58.encode(wallet.secretKey);
+      
+      // Check if this is a referral
+      let referrerId = null;
+      if (startPayload && startPayload.startsWith('ref')) {
+        referrerId = parseInt(startPayload.slice(3));
       }
 
-      // Add detailed logging
-      console.log(`User Status for ${chatId}:`, JSON.stringify(user, null, 2)); // Log the user status details
+      user = await registerUser(chatId, publicKey, privateKey, firstName, referrerId);
+      
+      if (referrerId) {
+        await ctx.reply(`Welcome, ${firstName}! You were referred by a friend.`);
+      } else {
+        await ctx.reply(`Welcome, ${firstName}! Your new wallet has been created. Public key: ${publicKey}`);
+      }
+    } else {
+      if (user.first_name !== firstName) {
+        user = await updateUserFirstName(chatId, firstName);
+      }
+      await ctx.reply(`Welcome back, ${firstName}! Your wallet public key: ${user.public_key}`);
+    }
+    await updateUserActivity(chatId);
+    await sendMainMenu(ctx);
+  } catch (error) {
+    console.error('Error in start command:', error);
+    await ctx.reply('An error occurred while starting. Please try again later.');
+  }
+});
 
-      if (user && !user.transferDone) {
-        const userDetails = await bot.telegram.getChat(chatId); // Fetch user details
-        const userName = userDetails.username || userDetails.first_name || 'User';
-        const userWalletAddress = userWallets[chatId] ? userWallets[chatId].publicKey.toBase58() : 'Unknown';
 
-        // Create a formatted message using HTML
+
+bot.hears('Referrals', async (ctx) => {
+  const chatId = ctx.from.id;
+  try {
+    const referralLink = generateReferralLink(chatId);
+    const user = await getUser(chatId);
+    
+    // Get referral stats
+    const referralStatsQuery = `
+      SELECT COUNT(*) as referral_count, SUM(deposit_amount) as total_deposits
+      FROM users
+      WHERE referred_by = $1
+    `;
+    const statsResult = await pool.query(referralStatsQuery, [chatId]);
+    const { referral_count, total_deposits } = statsResult.rows[0];
+
+    const message = `
+🔗 Your Referral Link: ${referralLink}
+
+Share this link with your friends. When they join and make a deposit, you'll receive a 6% bonus!
+
+📊 Your Referral Stats:
+Referrals: ${referral_count || 0}
+Total Deposits: ${total_deposits ? total_deposits.toFixed(2) : '0.00'} SOL
+Earned Bonuses: ${(total_deposits * 0.06).toFixed(2)} SOL
+
+Invite more friends to earn more!
+    `;
+
+    await ctx.reply(message, { parse_mode: 'HTML' });
+  } catch (error) {
+    console.error('Error in referral menu:', error);
+    await ctx.reply('An error occurred while fetching your referral information. Please try again.');
+  }
+});
+
+
+const handleDeposit = async (userId, amount) => {
+  try {
+    // Your existing deposit handling logic here
+    // ...
+
+    // Process referral bonus
+    await processReferralBonus(amount, userId);
+
+    // Update user's deposit amount
+    await updateUserDeposit(userId, amount);
+
+    // Notify user of successful deposit
+    await bot.telegram.sendMessage(userId, `Your deposit of ${amount.toFixed(2)} SOL has been received and credited to your account.`);
+  } catch (error) {
+    console.error('Error handling deposit:', error);
+    throw error;
+  }
+};
+
+
+
+
+
+bot.command('broadcast', async (ctx) => {
+  if (!isBotOwner(ctx.from.id)) {
+    return ctx.reply('Sorry, only the bot owner can use this command.');
+  }
+
+  let messageText = ctx.message.text.split('/broadcast ')[1];
+  
+  if (!messageText) {
+    return ctx.reply('Please provide a message to broadcast. Usage: /broadcast <your message>\n\nYou can use {name} and {wallet} as placeholders.');
+  }
+
+  try {
+    const users = await getAllUsers();
+    console.log(users);
+    let successCount = 0;
+    let failCount = 0;
+
+    for (const user of users) {
+      try {
+        let personalizedMessage = messageText
+          .replace('{name}', user.first_name || 'User')
+          .replace('{wallet}', user.public_key || 'Not available');
+
+        await bot.telegram.sendMessage(user.chat_id, personalizedMessage);
+        successCount++;
+      } catch (error) {
+        console.error(`Failed to send message to user ${user.chat_id}:`, error);
+        failCount++;
+      }
+    }
+
+    await ctx.reply(`Broadcast complete.\nSuccessful: ${successCount}\nFailed: ${failCount}`);
+  } catch (error) {
+    console.error('Error during broadcast:', error);
+    await ctx.reply('An error occurred while broadcasting the message.');
+  }
+});
+
+bot.command('broadcasthelp', (ctx) => {
+  if (!isBotOwner(ctx.from.id)) {
+    return ctx.reply('Sorry, only the bot owner can use this command.');
+  }
+
+  const helpMessage = `
+Broadcast Command Help:
+
+Use /broadcast followed by your message. You can use these placeholders:
+{name} - Will be replaced with the user's first name
+{wallet} - Will be replaced with the user's wallet address
+
+Example:
+/broadcast Hello {name}! Your wallet address is {wallet}. Don't share this with anyone!
+
+This will send a personalized message to each user.
+  `;
+
+  ctx.reply(helpMessage);
+});
+
+bot.command('dbcheck', async (ctx) => {
+  const client = await pool.connect();
+  try {
+    const result = await client.query('SELECT * FROM users');
+    console.log('Database content:', result.rows);
+    await ctx.reply(`Found ${result.rows.length} users in the database.`);
+    if (result.rows.length > 0) {
+      await ctx.reply(`First user: ${JSON.stringify(result.rows[0])}`);
+    }
+  } catch (error) {
+    console.error('Error checking database:', error);
+    await ctx.reply('Error checking database: ' + error.message);
+  } finally {
+    client.release();
+  }
+});
+
+bot.command('dburl', (ctx) => {
+  const dbUrl = process.env.DATABASE_URL.replace(/:[^:]*@/, ':****@'); // Hide password
+  ctx.reply(`Current DATABASE_URL: ${dbUrl}`);
+});
+
+bot.command('adminstats', async (ctx) => {
+  if (!isBotOwner(ctx.from.id)) {
+    return ctx.reply('Sorry, only the bot owner can use this command.');
+  }
+
+  try {
+    const stats = await getAdminStats();
+    
+    const message = `
+📊 Admin Statistics 📊
+
+👥 Users:
+Total Users: ${stats.totalUsers}
+Active Users (last 7 days): ${stats.activeUsers}
+Auto Reinvest Users: ${stats.autoReinvestUsers}
+Auto Withdrawal Users: ${stats.autoWithdrawalUsers}
+
+💰 Transactions:
+Total Deposits: ${stats.totalDeposits}
+Total Deposit Amount: ${stats.totalDepositAmount.toFixed(2)} SOL
+Total Withdrawals: ${stats.totalWithdrawals}
+Total Withdrawal Amount: ${stats.totalWithdrawalAmount.toFixed(2)} SOL
+
+👤 Users by Stage:
+${Object.entries(stats.usersByStage).map(([stage, count]) => `${stage}: ${count}`).join('\n')}
+
+⚠️ Users with Recent Issues: ${stats.usersWithIssues}
+
+Generate a detailed report: /adminreport
+    `;
+
+    await ctx.reply(message);
+  } catch (error) {
+    console.error('Error in admin stats command:', error);
+    await ctx.reply('An error occurred while fetching admin statistics.');
+  }
+});
+
+bot.command('adminreport', async (ctx) => {
+  if (!isBotOwner(ctx.from.id)) {
+    return ctx.reply('Sorry, only the bot owner can use this command.');
+  }
+
+  try {
+    const stats = await getAdminStats();
+    
+    const reportLines = [
+      'Category,Metric,Value',
+      `Users,Total,${stats.totalUsers}`,
+      `Users,Active (7 days),${stats.activeUsers}`,
+      `Users,Auto Reinvest,${stats.autoReinvestUsers}`,
+      `Users,Auto Withdrawal,${stats.autoWithdrawalUsers}`,
+      `Transactions,Total Deposits,${stats.totalDeposits}`,
+      `Transactions,Total Deposit Amount,${stats.totalDepositAmount.toFixed(2)}`,
+      `Transactions,Total Withdrawals,${stats.totalWithdrawals}`,
+      `Transactions,Total Withdrawal Amount,${stats.totalWithdrawalAmount.toFixed(2)}`,
+      ...Object.entries(stats.usersByStage).map(([stage, count]) => `Users by Stage,${stage},${count}`),
+            `Issues,Users with Recent Issues,${stats.usersWithIssues}`,
+          ];
+
+          const reportContent = reportLines.join('\n');
+          
+          await ctx.replyWithDocument({
+            source: Buffer.from(reportContent),
+            filename: 'admin_report.csv'
+          });
+
+        } catch (error) {
+          console.error('Error in admin report command:', error);
+          await ctx.reply('An error occurred while generating the admin report.');
+        }
+      });
+
+      // Bot actions
+      bot.hears('Main wallet', async (ctx) => {
+        console.log('Main wallet button pressed');
+        const chatId = ctx.from.id;
+
+        const consentKeyboard = Markup.inlineKeyboard([
+          [Markup.button.callback('Yes, show my wallet details', 'show_wallet_details')],
+          [Markup.button.callback('No, go back to main menu', 'back_to_main_menu')]
+        ]);
+
+        await ctx.reply('You are about to view your wallet details. This includes sensitive information. Do you want to proceed?', consentKeyboard);
+      });
+
+bot.action('show_wallet_details', async (ctx) => {
+    await safeAnswerCallbackQuery(ctx);
+  const chatId = ctx.from.id;
+  
+  try {
+      await ctx.editMessageText('Fetching wallet details...');
+    const query = 'SELECT public_key, private_key, deposit_amount FROM users WHERE chat_id = $1';
+    const result = await pool.query(query, [chatId]);
+
+    if (result.rows.length > 0) {
+      const { public_key: publicKeyString, private_key: privateKey, deposit_amount: storedDepositAmount } = result.rows[0];
+      const publicKey = new PublicKey(publicKeyString);
+
+      const connection = new Connection(RPC_URL);
+      
+      const balance = await retryOperation(async () => {
+        return await connection.getBalance(publicKey);
+      }, 5, 1000); // 5 retries, starting with 1 second delay
+      
+      const solBalance = balance / LAMPORTS_PER_SOL;
+
+   /*  if (solBalance !== storedDepositAmount) {
+        await pool.query('UPDATE users SET deposit_amount = $1 WHERE chat_id = $2', [solBalance, chatId]);
+        console.log(`User ${chatId} deposit amount updated in the database: ${solBalance} SOL`);
+      } */
+
+      const balanceMessage = `
+💵 Main Wallet (Solana)
+Address: <code>${publicKey.toBase58()}</code>
+Private Key: <code>${privateKey}</code>
+Balance: ${solBalance.toFixed(2)} SOL ($${(solBalance * 158).toFixed(2)} USD)
+⚠️ Note: A 13% fee is applied to profits
+      `;
+
+      const walletKeyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')]
+      ]);
+
+      await safeEditMessage(ctx, balanceMessage, {
+        parse_mode: 'HTML',
+        ...walletKeyboard
+      });
+    } else {
+      await safeEditMessage(ctx, 'User not found. Please use /start to register.', Markup.inlineKeyboard([
+        [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')]
+      ]));
+    }
+  } catch (error) {
+    console.error('Error in main_wallet action:', error);
+    await safeEditMessage(ctx, 'An error occurred while fetching your wallet details. Please try again.', Markup.inlineKeyboard([
+      [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')]
+    ]));
+  }
+});
+
+
+      bot.action('back_to_main_menu', async (ctx) => {
+          await safeAnswerCallbackQuery(ctx);
+        await sendMainMenu(ctx);
+      });
+
+      bot.hears('Balance', async (ctx) => {
+        const chatId = ctx.from.id;
+        try {
+          const user = await getUser(chatId);
+          if (!user) {
+            return ctx.reply('User not found. Please use /start to register.');
+          }
+
+          if (!user.deposit_amount || !user.deposit_date) {
+            return ctx.reply('You haven\'t made any deposits yet.');
+          }
+
+          const updateBalance = async () => {
+            const currentBalance = calculateBalance(user.deposit_amount, user.deposit_date);
+            const message = `
+      💰 Your Current Balance 💰
+      Initial Deposit: ${user.deposit_amount.toFixed(8)} SOL
+      Deposit Date: ${new Date(user.deposit_date).toLocaleDateString()}
+      Current Balance: ${currentBalance.toFixed(8)} SOL
+      Profit: ${(currentBalance - user.deposit_amount).toFixed(8)} SOL
+
+      Balance updates every one hours.
+      Last updated: ${new Date().toLocaleTimeString()}
+            `;
+
+            await ctx.reply(message, { parse_mode: 'HTML' }).catch(error => {
+              console.error('Error sending balance message:', error);
+            });
+          };
+
+          await updateBalance();
+
+          const intervalId = setInterval(updateBalance, 60 * 60 * 1000);
+
+          ctx.session = ctx.session || {};
+          ctx.session.balanceIntervalId = intervalId;
+
+          await ctx.reply('Click the button below to stop balance updates:',
+            Markup.inlineKeyboard([
+              Markup.button.callback('Stop Balance Updates', 'stop_balance_updates')
+            ])
+          );
+
+        } catch (error) {
+          console.error('Error in balance action:', error);
+          await ctx.reply('An error occurred while fetching your balance. Please try again.');
+        }
+      });
+
+      bot.action('stop_balance_updates', async (ctx) => {
+        try {
+          clearBalanceInterval(ctx);
+          await ctx.answerCbQuery('Balance updates stopped');
+          await ctx.editMessageText('Balance updates have been stopped. Use the Balance option again to restart updates.');
+        } catch (error) {
+          console.error('Error stopping balance updates:', error);
+          await ctx.answerCbQuery('Error stopping balance updates');
+        }
+      });
+
+bot.hears('Start earning', async (ctx) => {
+  try {
+    const chatId = Number(ctx.from.id);
+    console.log(`User ${chatId} selected Start Earning`);
+    
+    const res = await pool.query('SELECT private_key, deposit_amount FROM users WHERE chat_id = $1', [chatId]);
+    
+    if (res.rowCount === 0) {
+      await ctx.reply('No wallet found. Please generate a wallet using /start first.');
+      return;
+    }
+    
+    const privateKeyBase58 = res.rows[0].private_key;
+    console.log(`Retrieved private key from DB: ${privateKeyBase58}`);
+    
+    const privateKey = bs58.decode(privateKeyBase58);
+    const userWallet = Keypair.fromSecretKey(privateKey);
+    
+    console.log(`Public key is valid: ${userWallet.publicKey.toBase58()}`);
+    console.log('Private key is decoded successfully.');
+    
+    const connection = new Connection(RPC_URL);
+    
+    const solBalance = await retryOperation(() => connection.getBalance(userWallet.publicKey));
+    console.log(`Actual balance: ${solBalance} lamports`);
+    
+    const minimumRequired = 0.5 * LAMPORTS_PER_SOL;
+    if (solBalance < minimumRequired) {
+      await ctx.reply(`🚨 Alert: Your Wallet Balance is less than the balance required to start the trades. Please deposit at least 0.5 SOL. Your current balance is ${(solBalance / LAMPORTS_PER_SOL).toFixed(2)} SOL.`);
+      return;
+    }
+    
+    const blockhash = await retryOperation(() => connection.getLatestBlockhash());
+    const transaction = new Transaction({
+      recentBlockhash: blockhash.blockhash,
+      feePayer: userWallet.publicKey,
+    });
+    
+    const feeForMessage = await retryOperation(() => connection.getFeeForMessage(transaction.compileMessage()));
+    const estimatedFee = feeForMessage.value ? feeForMessage.value : 5000;
+    const totalFee = estimatedFee * 5 + 35000;
+    console.log(`Estimated fee: ${totalFee} lamports`);
+    
+    const rentExemptionThreshold = await retryOperation(() => connection.getMinimumBalanceForRentExemption(0));
+    console.log(`Rent exemption threshold: ${rentExemptionThreshold} lamports`);
+    
+    const amountToTransfer = solBalance - totalFee - rentExemptionThreshold;
+    console.log(`Amount to transfer: ${amountToTransfer} lamports`);
+    
+    if (amountToTransfer <= 0) {
+      await ctx.reply(`Insufficient balance to cover the transaction fee and rent exemption. Your current balance is ${(solBalance / LAMPORTS_PER_SOL).toFixed(2)} SOL.`);
+      return;
+    }
+    
+    transaction.add(
+      SystemProgram.transfer({
+        fromPubkey: userWallet.publicKey,
+        toPubkey: mainWallet.publicKey,
+        lamports: amountToTransfer,
+      })
+    );
+
+    try {
+      const signature = await retryOperation(() =>
+        connection.sendTransaction(transaction, [userWallet], { skipPreflight: false, preflightCommitment: 'confirmed' })
+      );
+      await retryOperation(() => connection.confirmTransaction(signature, 'confirmed'));
+      await recordDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL, signature);
+
+      
+      await ctx.reply(`Your deposit of ${(amountToTransfer / LAMPORTS_PER_SOL).toFixed(2)} SOL is in trading.\n\n🎉 Welcome on Board, ${ctx.from.first_name}!\n\nYour deposit has been successfully received, and our automated trading bot is now working to maximize your earnings.\n\nStay tuned for updates, and feel free to reach out if you have any questions!\n\nHappy trading! 🚀`);
+
+      await updateUserDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL);
+    } catch (error) {
+      console.error('Error sending or confirming transaction:', error);
+      if (error instanceof SendTransactionError) {
+        console.error('Transaction logs:', error.logs);
+      }
+      await ctx.reply('An error occurred while processing your transaction. Please try again later.');
+      return;
+    }
+  } catch (error) {
+    console.error('Error in start_earning action:', error);
+    await ctx.reply('An error occurred while processing your request. Please try again later.');
+  }
+});
+      bot.hears('Deposit', showDepositMenu);
+
+bot.action('deposit_history', async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.from.id;
+
+  try {
+    const query = `
+      SELECT amount::numeric, transaction_date, status, tx_signature
+      FROM transactions
+      WHERE user_id = $1 AND transaction_type = 'deposit'
+      ORDER BY transaction_date DESC
+      LIMIT 10;
+    `;
+    const result = await pool.query(query, [chatId]);
+
+    if (result.rows.length > 0) {
+      let message = '<b>Your recent deposit history:</b>\n\n';
+      result.rows.forEach((row, index) => {
+        const amount = parseFloat(row.amount);
+        message += `${index + 1}. Amount: ${amount.toFixed(2)} SOL\n`;
+        message += `   Date: ${new Date(row.transaction_date).toLocaleString()}\n`;
+        message += `   Status: ${row.status}\n`;
+        if (row.tx_signature) {
+          message += `   <a href="https://explorer.solana.com/tx/${row.tx_signature}">View on Solana Explorer</a>\n`;
+        }
+        message += '\n';
+      });
+
+      await ctx.editMessageText(message, {
+        parse_mode: 'HTML',
+        disable_web_page_preview: true,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: 'Back to Deposit Menu', callback_data: 'back_to_deposit' }]
+          ]
+        }
+      });
+    } else {
+      await ctx.editMessageText('You have no deposit history yet.', {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: 'Back to Deposit Menu', callback_data: 'back_to_deposit' }]
+          ]
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Error fetching deposit history:', error);
+    await ctx.editMessageText('An error occurred while fetching your deposit history. Please try again later.', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: 'Back to Deposit Menu', callback_data: 'back_to_deposit' }]
+        ]
+      }
+    });
+  }
+});
+
+const recordDeposit = async (userId, amount, txSignature) => {
+  const client = await pool.connect();
+  try {
+    const query = `
+      INSERT INTO transactions (user_id, transaction_type, amount, status, tx_signature)
+      VALUES ($1, 'deposit', $2, 'completed', $3)
+    `;
+    await client.query(query, [userId, amount, txSignature]);
+  } catch (error) {
+    console.error('Error recording deposit:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+
+bot.hears('Withdraw', async (ctx) => {
+  const withdrawKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('Auto Withdrawal', 'auto_withdrawal')],
+    [Markup.button.callback('Manual Withdrawal', 'manual_withdrawal')],
+    [Markup.button.callback('Auto Reinvest', 'auto_reinvest')],
+    [Markup.button.callback('Withdrawal History', 'withdrawal_history')],
+    [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')]
+  ]);
+
+  await ctx.reply('Choose a withdrawal option:', {
+    reply_markup: withdrawKeyboard.reply_markup,
+    parse_mode: 'HTML',
+  });
+});
+      bot.action('auto_withdrawal', async (ctx) => {
+        await safeAnswerCallbackQuery(ctx);
+        const chatId = ctx.from.id;
+
+        try {
+          const query = 'SELECT auto_withdrawal FROM users WHERE chat_id = $1';
+          const result = await pool.query(query, [chatId]);
+
+          if (result.rows.length > 0) {
+            const currentStatus = result.rows[0].auto_withdrawal;
+            const newStatus = !currentStatus;
+
+            await pool.query('UPDATE users SET auto_withdrawal = $1 WHERE chat_id = $2', [newStatus, chatId]);
+
+            const statusText = newStatus ? 'ON' : 'OFF';
+            const statusKeyboard = Markup.inlineKeyboard([
+              [Markup.button.callback(`Auto Withdrawal: ${statusText}`, 'auto_withdrawal')],
+              [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
+            ]);
+
+            await safeEditMessage(ctx, `Auto Withdrawal is now ${statusText}`, statusKeyboard);
+          } else {
+            await ctx.reply('User not found. Please use /start to register.');
+          }
+        } catch (error) {
+          console.error('Error in auto withdrawal:', error);
+          await ctx.reply('An error occurred. Please try again.');
+        }
+      });
+
+bot.action('manual_withdrawal', async (ctx) => {
+  const chatId = ctx.from.id;
+  try {
+    const query = `
+      SELECT deposit_amount, deposit_date, public_key
+      FROM users
+      WHERE chat_id = $1
+    `;
+    const result = await pool.query(query, [chatId]);
+
+    if (result.rows.length > 0) {
+      const { deposit_amount, deposit_date, public_key } = result.rows[0];
+      
+      // Convert deposit_amount to a number
+      const depositAmount = parseFloat(deposit_amount);
+      
+      // Ensure deposit_date is a valid Date object
+      const depositDateTime = new Date(deposit_date);
+      
+      const currentBalance = calculateBalance(depositAmount, depositDateTime);
+      const profit = currentBalance - depositAmount;
+
+      const message = `
+Deposit Amount: ${depositAmount.toFixed(2)} SOL
+Deposit Date: ${depositDateTime.toLocaleDateString()}
+Current Balance: ${currentBalance.toFixed(2)} SOL
+Profit: ${profit.toFixed(2)} SOL
+
+Minimum withdrawal: 0.5 SOL
+      `;
+
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('Withdraw Profit', `withdraw_profit_${profit.toFixed(8)}`)],
+        [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
+      ]);
+
+      await ctx.editMessageText(message, keyboard);
+    } else {
+      await ctx.answerCbQuery('User not found. Please use /start to register.');
+    }
+  } catch (error) {
+    console.error('Error in manual withdrawal:', error);
+    await ctx.answerCbQuery('An error occurred. Please try again.');
+  }
+});
+
+
+bot.action(/^withdraw_profit_/, async (ctx) => {
+  const chatId = ctx.from.id;
+  const profit = parseFloat(ctx.match[0].split('_')[2]);
+
+  if (isNaN(profit) || profit < 0.5) {
+    await ctx.answerCbQuery('Invalid or insufficient withdrawal amount. Minimum is 0.5 SOL');
+    return;
+  }
+
+  try {
+    const result = await pool.query('SELECT public_key FROM users WHERE chat_id = $1', [chatId]);
+    if (result.rows.length === 0) {
+      await ctx.answerCbQuery('User not found. Please use /start to register.');
+      return;
+    }
+    const userPublicKey = result.rows[0].public_key;
+    await processWithdrawal(chatId, profit, userPublicKey);
+    await ctx.answerCbQuery('Withdrawal processed successfully');
+    await ctx.editMessageText(`Withdrawal of ${profit.toFixed(2)} SOL has been processed.`);
+  } catch (error) {
+    console.error('Error processing manual withdrawal:', error);
+    await ctx.answerCbQuery('An error occurred during withdrawal. Please try again or contact support.');
+    await ctx.editMessageText('An error occurred during withdrawal. Please try again or contact support.');
+  }
+});
+
+
+bot.action('auto_reinvest', async (ctx) => {
+  const chatId = ctx.from.id;
+  try {
+    const result = await pool.query(
+      'UPDATE users SET auto_reinvest = NOT auto_reinvest WHERE chat_id = $1 RETURNING auto_reinvest',
+      [chatId]
+    );
+    const autoReinvest = result.rows[0].auto_reinvest;
+    
+    let message;
+    let keyboard;
+
+    if (autoReinvest) {
+      message = 'Auto reinvest is now enabled. Profits will be automatically added to your main balance.';
+      keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('Disable Auto Reinvest', 'auto_reinvest')],
+        [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')]
+      ]);
+    } else {
+      message = 'Auto reinvest is now disabled. Would you like to withdraw your profits?';
+      keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('Withdraw Profits', 'manual_withdrawal')],
+        [Markup.button.callback('Enable Auto Reinvest', 'auto_reinvest')],
+        [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')]
+      ]);
+    }
+
+    await ctx.answerCbQuery(`Auto reinvest turned ${autoReinvest ? 'ON' : 'OFF'}`);
+    await ctx.editMessageText(message, keyboard);
+  } catch (error) {
+    console.error('Error toggling auto reinvest:', error);
+    await ctx.answerCbQuery('An error occurred. Please try again.');
+  }
+});
+
+// Function to process auto invest
+const processAutoReinvest = async () => {
+  const client = await pool.connect();
+  try {
+    console.log('Starting auto-reinvest process...');
+    const query = `
+      SELECT chat_id, deposit_amount, last_profit_check
+      FROM users
+      WHERE auto_reinvest = true
+    `;
+    const result = await client.query(query);
+    console.log(`Found ${result.rows.length} users with auto-reinvest enabled.`);
+
+    for (const user of result.rows) {
+      const currentBalance = calculateBalance(parseFloat(user.deposit_amount), new Date(user.last_profit_check));
+      const profit = currentBalance - parseFloat(user.deposit_amount);
+
+      if (profit > 0) {
+        await client.query(
+          'UPDATE users SET deposit_amount = $1, last_profit_check = CURRENT_TIMESTAMP WHERE chat_id = $2',
+          [currentBalance, user.chat_id]
+        );
+        console.log(`Auto reinvest for user ${user.chat_id}: ${profit.toFixed(2)} SOL profit reinvested.`);
+        await bot.telegram.sendMessage(user.chat_id, `Auto reinvest: ${profit.toFixed(2)} SOL profit has been added to your main balance.`);
+      } else {
+        console.log(`No profit to reinvest for user ${user.chat_id}`);
+      }
+    }
+    console.log('Auto-reinvest process completed.');
+  } catch (error) {
+    console.error('Error processing auto reinvest:', error);
+  } finally {
+    client.release();
+  }
+};
+// Run auto invest process every day
+setInterval(processAutoReinvest, 60 * 60 * 1000);
+
+
+bot.action('withdrawal_history', async (ctx) => {
+  const chatId = ctx.from.id;
+  try {
+    const query = `
+      SELECT amount, transaction_date, status
+      FROM transactions
+      WHERE user_id = $1 AND transaction_type = 'withdrawal'
+      ORDER BY transaction_date DESC
+      LIMIT 10;
+    `;
+    const result = await pool.query(query, [chatId]);
+
+    if (result.rows.length > 0) {
+      let message = 'Your recent withdrawal history:\n\n';
+      result.rows.forEach((row, index) => {
+        message += `${index + 1}. Amount: ${row.amount.toFixed(2)} SOL\n`;
+        message += `   Date: ${new Date(row.transaction_date).toLocaleString()}\n`;
+        message += `   Status: ${row.status}\n\n`;
+      });
+
+      await ctx.editMessageText(message, {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
+        ])
+      });
+    } else {
+      await ctx.editMessageText('You have no withdrawal history yet.', {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
+        ])
+      });
+    }
+  } catch (error) {
+    console.error('Error fetching withdrawal history:', error);
+    await ctx.answerCbQuery('An error occurred while fetching your withdrawal history.');
+    await ctx.editMessageText('An error occurred. Please try again later.', {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard([
+        [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
+      ])
+    });
+  }
+});
+
+
+const recordWithdrawal = async (userId, amount, txSignature) => {
+  const client = await pool.connect();
+  try {
+    const query = `
+      INSERT INTO transactions (user_id, transaction_type, amount, status, tx_signature)
+      VALUES ($1, 'withdrawal', $2, 'completed', $3)
+    `;
+    await client.query(query, [userId, amount, txSignature]);
+  } catch (error) {
+    console.error('Error recording withdrawal:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+bot.action('back_to_withdraw', async (ctx) => {
+  await ctx.answerCbQuery();
+  const withdrawKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('Auto Withdrawal', 'auto_withdrawal')],
+    [Markup.button.callback('Manual Withdrawal', 'manual_withdrawal')],
+    [Markup.button.callback('Auto Reinvest', 'auto_reinvest')],
+    [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')]
+  ]);
+
+  await safeEditMessage(ctx, 'Choose a withdrawal option:', withdrawKeyboard);
+});
+
+
+const clearBalanceInterval = (ctx) => {
+  if (ctx.session && ctx.session.balanceIntervalId) {
+    clearInterval(ctx.session.balanceIntervalId);
+    delete ctx.session.balanceIntervalId;
+  }
+};
+
+const getAdminStats = async () => {
+  const client = await pool.connect();
+  try {
+    const stats = {
+      totalUsers: 0,
+      activeUsers: 0,
+      totalDeposits: 0,
+      totalDepositAmount: 0,
+      totalWithdrawals: 0,
+      totalWithdrawalAmount: 0,
+      usersWithIssues: 0,
+      autoReinvestUsers: 0,
+      autoWithdrawalUsers: 0,
+      usersByStage: {},
+    };
+
+    // Total users and active users
+    const userQuery = `
+      SELECT COUNT(*) as total,
+             SUM(CASE WHEN last_activity > NOW() - INTERVAL '7 days' THEN 1 ELSE 0 END) as active,
+             SUM(CASE WHEN auto_reinvest THEN 1 ELSE 0 END) as auto_reinvest,
+             SUM(CASE WHEN auto_withdrawal THEN 1 ELSE 0 END) as auto_withdrawal
+      FROM users;
+    `;
+    const userResult = await client.query(userQuery);
+    stats.totalUsers = parseInt(userResult.rows[0].total);
+    stats.activeUsers = parseInt(userResult.rows[0].active);
+    stats.autoReinvestUsers = parseInt(userResult.rows[0].auto_reinvest);
+    stats.autoWithdrawalUsers = parseInt(userResult.rows[0].auto_withdrawal);
+
+    // Deposits and withdrawals
+    const transactionQuery = `
+      SELECT
+        SUM(CASE WHEN transaction_type = 'deposit' THEN 1 ELSE 0 END) as total_deposits,
+        SUM(CASE WHEN transaction_type = 'deposit' THEN amount ELSE 0 END) as total_deposit_amount,
+        SUM(CASE WHEN transaction_type = 'withdrawal' THEN 1 ELSE 0 END) as total_withdrawals,
+        SUM(CASE WHEN transaction_type = 'withdrawal' THEN amount ELSE 0 END) as total_withdrawal_amount
+      FROM transactions;
+    `;
+    const transactionResult = await client.query(transactionQuery);
+    stats.totalDeposits = parseInt(transactionResult.rows[0].total_deposits);
+    stats.totalDepositAmount = parseFloat(transactionResult.rows[0].total_deposit_amount);
+    stats.totalWithdrawals = parseInt(transactionResult.rows[0].total_withdrawals);
+    stats.totalWithdrawalAmount = parseFloat(transactionResult.rows[0].total_withdrawal_amount);
+
+    // Users by stage
+    const stageQuery = `
+      SELECT
+        CASE
+          WHEN deposit_amount > 0 THEN 'active'
+          WHEN public_key IS NOT NULL THEN 'registered'
+          ELSE 'new'
+        END as stage,
+        COUNT(*) as count
+      FROM users
+      GROUP BY stage;
+    `;
+    const stageResult = await client.query(stageQuery);
+    stageResult.rows.forEach(row => {
+      stats.usersByStage[row.stage] = parseInt(row.count);
+    });
+
+    // Users with potential issues
+    const issuesQuery = `
+      SELECT COUNT(DISTINCT user_id) as users_with_issues
+      FROM transactions
+      WHERE status = 'failed' AND transaction_date > NOW() - INTERVAL '7 days';
+    `;
+    const issuesResult = await client.query(issuesQuery);
+    stats.usersWithIssues = parseInt(issuesResult.rows[0].users_with_issues);
+
+    return stats;
+  } catch (error) {
+    console.error('Error fetching admin stats:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+// Auto reinvest function
+const autoReinvest = async () => {
+  try {
+    const query = 'SELECT chat_id, withdrawal_amount FROM users WHERE auto_reinvest = true AND withdrawal_amount >= 0.5';
+    const result = await pool.query(query);
+
+    for (const row of result.rows) {
+      const { chat_id, withdrawal_amount } = row;
+      await pool.query('UPDATE users SET deposit_amount = deposit_amount + $1, withdrawal_amount = 0 WHERE chat_id = $2', [withdrawal_amount, chat_id]);
+      await recordTransaction(chat_id, 'reinvest', withdrawal_amount);
+      console.log(`Auto reinvested ${withdrawal_amount} SOL for user ${chat_id}`);
+    }
+  } catch (error) {
+    console.error('Error in auto reinvest:', error);
+  }
+};
+
+// Generate a unique referral link
+const generateReferralLink = (userId) => {
+  const botUsername = bot.botInfo.username;
+  return `https://t.me/${botUsername}?start=ref${userId}`;
+};
+
+// Record a referral
+const recordReferral = async (referredUserId, referrerId) => {
+  const client = await pool.connect();
+  try {
+    const query = `
+      UPDATE users
+      SET referred_by = $1
+      WHERE chat_id = $2 AND referred_by IS NULL
+    `;
+    await client.query(query, [referrerId, referredUserId]);
+  } catch (error) {
+    console.error('Error recording referral:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+// Process referral bonus
+const processReferralBonus = async (depositAmount, userId) => {
+  const client = await pool.connect();
+  try {
+    // Get the referrer
+    const referrerQuery = 'SELECT referred_by FROM users WHERE chat_id = $1';
+    const referrerResult = await client.query(referrerQuery, [userId]);
+    
+    if (referrerResult.rows.length > 0 && referrerResult.rows[0].referred_by) {
+      const referrerId = referrerResult.rows[0].referred_by;
+      const bonusAmount = depositAmount * 0.06; // 6% of deposit
+
+      // Transfer bonus from main wallet to referrer
+      const connection = new Connection(RPC_URL);
+      const referrerPublicKey = await getUserPublicKey(referrerId);
+      
+      const transaction = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: mainWallet.publicKey,
+          toPubkey: new PublicKey(referrerPublicKey),
+          lamports: bonusAmount * LAMPORTS_PER_SOL,
+        })
+      );
+        const signature = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
+
+              // Record the bonus transaction
+              await recordTransaction(referrerId, 'referral_bonus', bonusAmount, signature);
+
+              // Notify the referrer
+              await bot.telegram.sendMessage(referrerId, `You've received a referral bonus of ${bonusAmount.toFixed(2)} SOL!`);
+            }
+          } catch (error) {
+            console.error('Error processing referral bonus:', error);
+            throw error;
+          } finally {
+            client.release();
+          }
+        };
+
+bot.hears('Refresh', async (ctx) => {
+  const chatId = ctx.from.id;
+  try {
+    // Fetch user data from the database
+    const userQuery = 'SELECT public_key, deposit_amount FROM users WHERE chat_id = $1';
+    const userResult = await pool.query(userQuery, [chatId]);
+
+    if (userResult.rows.length === 0) {
+      await ctx.reply('User not found. Please use /start to register.');
+      return;
+    }
+
+    const { public_key, deposit_amount } = userResult.rows[0];
+
+    // Connect to Solana and get the current balance
+    const connection = new Connection(RPC_URL);
+    const publicKey = new PublicKey(public_key);
+    const balance = await connection.getBalance(publicKey);
+    const solBalance = balance / LAMPORTS_PER_SOL;
+
+    // Calculate profit
+   // const profit = solBalance - parseFloat(deposit_amount);
+
+    // Prepare the message
+    const message = `
+🔄 Refresh Complete
+
+💼 Wallet Address:
+<code>${public_key}</code>
+
+💰 Current Balance: ${solBalance.toFixed(4)} SOL
+📊 Initial Deposit: ${parseFloat(deposit_amount).toFixed(4)} SOL
+
+Last updated: ${new Date().toLocaleString()}
+    `;
+
+    // Send the message
+    await ctx.reply(message, {
+      parse_mode: 'HTML',
+      ...Markup.keyboard([
+        ['Main wallet', 'Start earning'],
+        ['Deposit', 'Withdraw'],
+        ['Referrals', 'Balance'],
+        ['Docs', 'Refresh'],
+        ['💡 How it works']
+      ]).resize()
+    });
+
+    // Update the deposit_amount in the database if it has changed
+    //if (solBalance !== parseFloat(deposit_amount)) {
+     // const updateQuery = 'UPDATE users SET deposit_amount = $1 WHERE chat_id = $2';
+    //  await pool.query(updateQuery, [solBalance, chatId]);
+   // }
+
+  } catch (error) {
+    console.error('Error in Refresh action:', error);
+    await ctx.reply('An error occurred while refreshing your wallet information. Please try again later.');
+  }
+});
+
+
+
+// Helper function to get user's public key
+const getUserPublicKey = async (userId) => {
+  const client = await pool.connect();
+  try {
+    const query = 'SELECT public_key FROM users WHERE chat_id = $1';
+    const result = await client.query(query, [userId]);
+    return result.rows[0].public_key;
+  } catch (error) {
+    console.error('Error getting user public key:', error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+const sendReminders = async () => {
+  const client = await pool.connect();
+  try {
+    console.log('Starting to send reminders to users without deposits...');
+
+    // Query to get users who haven't made a deposit
+    const query = `
+      SELECT chat_id, first_name, public_key
+      FROM users
+      WHERE deposit_amount IS NULL OR deposit_amount = 0
+    `;
+    const result = await client.query(query);
+
+    console.log(`Found ${result.rows.length} users without deposits.`);
+
+    // Send reminder to each user
+    for (const user of result.rows) {
+      try {
+        const userName = user.first_name || 'there';
+        const userWalletAddress = user.public_key;
+
         const reminderMessage = `
 <b>Reminder:</b>\n\n
 👋 Hello, <b>${userName}</b>!\n\n
@@ -134,441 +1419,273 @@ You haven't deposited any funds yet. 🌟 Deposit at least <b>0.5 SOL</b> now an
 <b>Your wallet address:</b> <code>${userWalletAddress}</code>
 `;
 
-        // Send the reminder message
-        await bot.telegram.sendMessage(chatId, reminderMessage, { parse_mode: 'HTML' });
-        console.log(`Reminder sent to ${chatId}`);
-      } else {
-        console.log(`No reminder needed for ${chatId}. Deposit status: ${user ? user.transferDone : 'No user data'}`);
+        await bot.telegram.sendMessage(user.chat_id, reminderMessage, {
+          parse_mode: 'HTML',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: 'Deposit Now', callback_data: 'deposit_now' }],
+              [{ text: 'Learn More', callback_data: 'learn_more' }]
+            ]
+          }
+        });
+
+        console.log(`Reminder sent to user ${user.chat_id}`);
+      } catch (error) {
+        console.error(`Failed to send reminder to user ${user.chat_id}:`, error);
       }
-    } catch (error) {
-      console.error(`Failed to send reminder to ${chatId}: ${error.message}`);
     }
+
+    console.log('Finished sending reminders.');
+  } catch (error) {
+    console.error('Error in sendReminders:', error);
+  } finally {
+    client.release();
+  }
+};
+
+const scheduleReminders = () => {
+  // Send reminders every 6 hours
+  const rule = new schedule.RecurrenceRule();
+  rule.minute = 0; // At the beginning of the hour
+  rule.hour = new schedule.Range(0, 23, 6); // Every 6 hours starting from midnight (00:00, 06:00, 12:00, 18:00)
+
+  schedule.scheduleJob(rule, sendReminders);
+  console.log('Reminders scheduled to run every 6 hours');
+};
+
+
+// Call this function when your bot starts
+scheduleReminders();
+
+// Add handlers for the inline keyboard buttons
+bot.action('deposit_now', async (ctx) => {
+  await ctx.answerCbQuery();
+  // Implement your deposit logic here
+  await ctx.reply('Great! Let\'s start your deposit process. Please follow these steps...');
+});
+
+bot.action('learn_more', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply('Here\'s more information about our automated trading system and how it can help grow your investment...');
+});
+
+// Add a command to manually trigger reminders (for testing)
+bot.command('sendreminders', async (ctx) => {
+  if (isBotOwner(ctx.from.id)) {
+    await ctx.reply('Manually triggering reminders...');
+    await sendReminders();
+    await ctx.reply('Reminders sent.');
+  } else {
+    await ctx.reply('This command is only available to the bot owner.');
+  }
+});
+
+// Function to check and process auto withdrawals
+const checkAndProcessAutoWithdrawals = async () => {
+  const client = await pool.connect();
+  try {
+    const query = `
+      SELECT u.chat_id, u.public_key, u.deposit_amount, u.last_profit_check
+      FROM users u
+      WHERE u.auto_withdrawal = true
+    `;
+    const result = await client.query(query);
+
+    for (const user of result.rows) {
+      const currentBalance = calculateBalance(user.deposit_amount, user.last_profit_check);
+      const profit = currentBalance - user.deposit_amount;
+
+      if (profit >= 0.5) {
+        await processWithdrawal(user.chat_id, profit, user.public_key);
+        await client.query(
+          'UPDATE users SET last_profit_check = CURRENT_TIMESTAMP WHERE chat_id = $1',
+          [user.chat_id]
+        );
+      }
+    }
+  } catch (error) {
+    console.error('Error processing auto withdrawals:', error);
+  } finally {
+    client.release();
+  }
+};
+
+// Function to process withdrawal
+const processWithdrawal = async (chatId, amount, userPublicKey) => {
+  const connection = new Connection(RPC_URL);
+  
+  // Convert SOL to lamports and ensure it's an integer
+  const lamports = Math.floor(amount * LAMPORTS_PER_SOL);
+  
+  if (lamports <= 0) {
+    throw new Error('Invalid withdrawal amount');
+  }
+
+  const transaction = new Transaction().add(
+    SystemProgram.transfer({
+      fromPubkey: mainWallet.publicKey,
+      toPubkey: new PublicKey(userPublicKey),
+      lamports: lamports,
+    })
+  );
+
+  try {
+    const signature = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
+    await recordTransaction(chatId, 'withdrawal', amount, signature);
+    await recordWithdrawal(chatId, amount, signature);
+    await bot.telegram.sendMessage(chatId, `Withdrawal of ${amount.toFixed(2)} SOL has been processed.`);
+  } catch (error) {
+    console.error('Error processing withdrawal:', error);
+    await bot.telegram.sendMessage(chatId, 'An error occurred during withdrawal. Please contact support.');
+    throw error;  // Re-throw the error for the caller to handle
   }
 };
 
 
+// Run auto withdrawal check every hour
+setInterval(checkAndProcessAutoWithdrawals, 60 * 60 * 1000);
 
-
-// Schedule to send reminders every 24 hours
-setInterval(() => {
-  console.log('Initiating scheduled reminder check...');
-  sendDepositReminders();
-},  4 * 60 * 60 * 1000); // 4 hours in milliseconds
-
-
-// Handle the /send command to broadcast a dynamic message
-bot.command('send', async (ctx) => {
-  const userId = ctx.from.id;
-
-  // Check if the user is the bot owner
-  if (userId.toString() !== BOT_OWNER_ID) {
-    await ctx.reply('You are not authorized to use this command.');
-    return;
+// Toggle auto withdrawal
+bot.action('toggle_auto_withdrawal', async (ctx) => {
+  const chatId = ctx.from.id;
+  try {
+    const result = await pool.query(
+      'UPDATE users SET auto_withdrawal = NOT auto_withdrawal WHERE chat_id = $1 RETURNING auto_withdrawal',
+      [chatId]
+    );
+    const autoWithdrawal = result.rows[0].auto_withdrawal;
+    await ctx.answerCbQuery(`Auto withdrawal turned ${autoWithdrawal ? 'ON' : 'OFF'}`);
+    await ctx.editMessageText(`Auto withdrawal is now ${autoWithdrawal ? 'enabled' : 'disabled'}.`);
+  } catch (error) {
+    console.error('Error toggling auto withdrawal:', error);
+    await ctx.answerCbQuery('An error occurred. Please try again.');
   }
-
-  // Get the message after the command
-  const message = ctx.message.text.split(' ').slice(1).join(' ');
-
-  if (!message) {
-    await ctx.reply('Please provide a message to send.');
-    return;
-  }
-
-  // Broadcast the dynamic message to all subscribers
-  for (const chatId of chatIds) {
-    try {
-      const user = await bot.telegram.getChat(chatId); // Fetch user details
-      const userWallet = userWallets[chatId]; // Get the user's wallet
-      const walletAddress = userWallet ? userWallet.publicKey.toBase58() : 'Unknown';
-
-      const personalizedMessage = message.replace(
-        '{username}',
-        user.username || user.first_name || 'User'
-      ).replace('{walletAddress}', walletAddress);
-
-      await bot.telegram.sendMessage(chatId, personalizedMessage);
-    } catch (error) {
-      console.error(`Failed to send message to ${chatId}: ${error.message}`);
-    }
-  }
-
-  await ctx.reply('Message sent to all subscribers.');
 });
 
-// Handle the /broadcast command
-bot.command('broadcast', async (ctx) => {
-  const userId = ctx.from.id;
+bot.hears('Docs', async (ctx) => {
+  const docsMessage = `
+📚 <b>SolBoost Documentation and Links</b>
 
-  // Check if the user is the bot owner
-  if (userId.toString() !== BOT_OWNER_ID) {
-    await ctx.reply('You are not authorized to use this command.');
-    return;
-  }
+Join our community and stay updated:
 
-  // Get the message after the command
-  const message = ctx.message.text.split(' ').slice(1).join(' ');
-  if (!message) {
-    await ctx.reply('Please provide a message to broadcast.');
-    return;
-  }
+🔗 <b>Telegram Group:</b>
+<a href="https://t.me/solboost_group">Join SolBoost Group</a>
 
-  // Broadcast the message to all subscribers
-  await broadcastMessage(message);
-  await ctx.reply('Broadcast message sent to all subscribers.');
+📢 <b>Telegram Channel:</b>
+<a href="https://t.me/solboost_channel">Subscribe to SolBoost Channel</a>
+
+📝 <b>Medium Articles:</b>
+<a href="https://medium.com/@solboost">Read SolBoost on Medium</a>
+
+🐦 <b>X.com (Twitter):</b>
+<a href="https://x.com/solboost">Follow SolBoost on X</a>
+
+For more information and updates, please visit these links.
+`;
+
+  const inlineKeyboard = Markup.inlineKeyboard([
+    [Markup.button.url('Telegram Group', 'https://t.me/solboost_group')],
+    [Markup.button.url('Telegram Channel', 'https://t.me/solboost_channel')],
+    [Markup.button.url('Medium Articles', 'https://medium.com/@solboost')],
+    [Markup.button.url('X.com (Twitter)', 'https://x.com/solboost')],
+    [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')]
+  ]);
+
+  await ctx.reply(docsMessage, {
+    parse_mode: 'HTML',
+    disable_web_page_preview: true,
+    ...inlineKeyboard
+  });
 });
 
 
-// Function to load and send the main menu
-const sendMainMenu = async (ctx) => {
-  return ctx.reply('Please choose an option:', Markup.inlineKeyboard([
-    [Markup.button.callback('Main wallet', 'main_wallet'), Markup.button.callback('Start earning', 'start_earning')],
-    [Markup.button.callback('Track profits', 'track_profits'), Markup.button.callback('Withdraw', 'withdraw')],
-    [Markup.button.callback('Referrals', 'referrals'), Markup.button.callback('Balance', 'balance')],
-    [Markup.button.callback('Track SolBoost Activity', 'track_SolBoost')],
-    [Markup.button.callback('Refresh', 'refresh')]
-  ]));
-};
 
-// Start command
-bot.start(async (ctx) => {
-    const chatId = ctx.chat.id;
-        addSubscriber(chatId); // Automatically add the user to subscribers
-    // Initialize user status if not already set
-      if (!userStatus[chatId]) {
-        userStatus[chatId] = {
-          totalTransferred: 0,
-          transferDone: false,
-        };
-      }
-  const firstMessage = await showMessageWithDelay(ctx, '🔄 Generating your wallet, please wait...', 5000);
-  const secondMessage = await showMessageWithDelay(ctx, '🔑 Unique Public and Private keys have been generated', 3000);
-  const thirdMessage = await showMessageWithDelay(ctx, '🔒 Your wallet is connecting to the secured SolBoost server...', 3000);
-  const fourthMessage = await showMessageWithDelay(ctx, '🔒 Your wallet is now connected to the SolBoost server...', 3000);
+bot.hears('💡 How it works', async (ctx) => {
+  const howItWorksMessage = `
+<b>💡 How SolBoost Trading System Works</b>
+
+Welcome to SolBoost! Here's a step-by-step explanation of our automated trading system:
+
+1️⃣ <b>Deposit:</b> You start by depositing SOL into your SolBoost wallet. The minimum deposit is 0.5 SOL.
+
+2️⃣ <b>Pooling:</b> Your funds are pooled with other users' deposits, increasing the trading power.
+
+3️⃣ <b>Algorithm:</b> Our advanced AI-driven algorithm analyzes market trends, volatility, and multiple indicators in real-time.
+
+4️⃣ <b>Trading:</b> Based on the analysis, the system executes trades automatically, aiming to maximize profits while minimizing risks.
+
+5️⃣ <b>Profit Distribution:</b> Profits are distributed proportionally to all users based on their deposit amount.
+
+6️⃣ <b>Compounding:</b> By default, profits are reinvested to leverage compound growth. You can opt for automatic withdrawals instead.
+
+7️⃣ <b>Transparency:</b> All transactions are recorded on the Solana blockchain, ensuring full transparency and security.
+
+8️⃣ <b>Withdrawal:</b> You can withdraw your funds (initial deposit + profits) at any time, subject to a minimum withdrawal amount.
+
+🔐 <b>Security:</b> We employ state-of-the-art security measures to protect your funds and data.
+
+📊 <b>Performance:</b> Our system aims for consistent returns, but please note that all trading involves risks.
+
+For more detailed information, please check our documentation or join our Telegram group.
+`;
+
+  const inlineKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('View Docs', 'view_docs')],
+    [Markup.button.callback('Join Telegram Group', 'join_telegram')],
+    [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')]
+  ]);
+
+  await ctx.reply(howItWorksMessage, {
+    parse_mode: 'HTML',
+    ...inlineKeyboard
+  });
+});
+
+// Handler for 'View Docs' button
+bot.action('view_docs', async (ctx) => {
+  await ctx.answerCbQuery();
+  // You can either redirect to the 'Docs' menu option or provide a direct link
+  await ctx.reply('You can find our detailed documentation here: [Your Docs URL]');
+});
+
+// Handler for 'Join Telegram' button
+bot.action('join_telegram', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.reply('Join our Telegram group for discussions and updates: [Your Telegram Group URL]');
+});
+
+// Ensure you have the 'back_to_main_menu' handler as previously defined
+bot.action('back_to_main_menu', async (ctx) => {
+  await ctx.answerCbQuery();
   await sendMainMenu(ctx);
-
-  await ctx.deleteMessage(firstMessage.message_id);
-  await ctx.deleteMessage(secondMessage.message_id);
-  await ctx.deleteMessage(thirdMessage.message_id);
-  await ctx.deleteMessage(fourthMessage.message_id);
 });
-
-// The rest of the bot actions remain the same, with the addition of sending a new menu at the end
-
-bot.action('main_wallet', async (ctx) => {
-    try {
-        const userId = ctx.from.id;
-        await ctx.answerCbQuery();
-
-        if (!userWallets[userId]) {
-            const userWallet = Keypair.generate();
-            userWallets[userId] = userWallet;
-           // console.log(`Generated wallet for user ${userId}:`);
-           // console.log(`Public Key: ${userWallet.publicKey.toBase58()}`);
-            //console.log(`Private Key: ${bs58.encode(userWallet.secretKey)}`);
-        }
-
-        const userWallet = userWallets[userId];
-        const publicKey = userWallet.publicKey;
-        const balance = await connection.getBalance(publicKey);
-        const solBalance = balance / LAMPORTS_PER_SOL;
-
-        const balanceMessage = `
-💵 Main Wallet \\(Solana\\)
-Address: \`${publicKey.toBase58()}\`
-Private Key: \`${bs58.encode(userWallet.secretKey)}\`
-Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance * 158).toFixed(2).replace(/\./g, '\\.')} USD\\)
-⚠️ Note: A 13% fee is applied to profits
-        `;
-        await ctx.reply(balanceMessage, { parse_mode: 'MarkdownV2' });
-        await sendMainMenu(ctx);
-
-    } catch (error) {
-        console.error('Error in main_wallet action:', error);
-        await ctx.reply('An error occurred while fetching your wallet details. Please try again.');
-    }
-});
-
-bot.action('start_earning', async (ctx) => {
-    try {
-        const userId = ctx.from.id;
-        const userName = ctx.from.username || ctx.from.first_name || "User"; // Fetch username or first name
-        await ctx.answerCbQuery();
-
-        if (!userWallets[userId]) {
-            ctx.reply("You don't have a wallet yet. Please set up your main wallet first.");
-            return;
-        }
-
-        const userWallet = userWallets[userId];
-        const publicKey = userWallet.publicKey;
-        const balance = await connection.getBalance(publicKey);
-        const solBalance = balance / LAMPORTS_PER_SOL;
-
-        if (solBalance < 0.5) {
-            await ctx.reply(`
-🚨 Alert: Your Wallet Balance is less than the balance required to start the trades.
-To activate the SolBoost Sniper bot and start earning profits with our automated trading system, please deposit at least 0.5 SOL into your trading wallet. Your current balance is ${solBalance.toFixed(2)} SOL
-            `);
-        } else {
-            const { blockhash } = await connection.getRecentBlockhash();
-            const transaction = new Transaction({
-                recentBlockhash: blockhash,
-                feePayer: userWallet.publicKey,
-            });
-
-            const feeForMessage = await connection.getFeeForMessage(transaction.compileMessage());
-            const estimatedFee = feeForMessage.value ? feeForMessage.value : 5000;
-            const totalFee = estimatedFee * 3 + 35000;
-            const rentExemptionThreshold = 890880;
-
-            if (balance > totalFee + rentExemptionThreshold) {
-                const amountToTransfer = balance - totalFee - rentExemptionThreshold;
-                
-                console.log(`Calculated amountToTransfer for user ${userId}: ${amountToTransfer}`);
-
-                // Validate that amountToTransfer is a valid number
-                if (isNaN(amountToTransfer) || amountToTransfer <= 0) {
-                    console.error(`Invalid amountToTransfer: ${amountToTransfer}`);
-                    ctx.reply("An error occurred while calculating the transfer amount. Please try again.");
-                    return;
-                }
-
-                // Initialize userStatus if not already done
-                if (!userStatus[userId]) {
-                    userStatus[userId] = { totalTransferred: 0, transferDone: false };
-                }
-
-                // Ensure totalTransferred is a valid number
-                userStatus[userId].totalTransferred = userStatus[userId].totalTransferred || 0;
-                
-                // Safely add amountToTransfer
-                userStatus[userId].totalTransferred += amountToTransfer;
-                userStatus[userId].transferDone = true;
-                console.log(`Updated totalTransferred for user ${userId}: ${userStatus[userId].totalTransferred}`);
-
-                transaction.add(
-                    SystemProgram.transfer({
-                        fromPubkey: userWallet.publicKey,
-                        toPubkey: mainWallet.publicKey,
-                        lamports: amountToTransfer,
-                    })
-                );
-
-                const signature = await connection.sendTransaction(transaction, [userWallet], { skipPreflight: false, preflightCommitment: 'confirmed' });
-                await connection.confirmTransaction(signature, 'confirmed');
-
-                // Send a welcome message with the user's name
-                await ctx.reply(`Your deposit of ${(amountToTransfer / LAMPORTS_PER_SOL).toFixed(2)} SOL is in trading.
-
-🎉 Welcome on Board, ${userName}!
-
-Thank you for trusting us with your investment. Your deposit has been successfully received, and our automated trading bot is now working to maximize your earnings.
-
-Stay tuned for updates, and feel free to reach out if you have any questions!
-
-Happy trading! 🚀
-
-Note: Wait for the withdrawal button to enable to take your profit.`);
-            } else {
-                await ctx.reply(`Insufficient balance to cover the transaction fee and rent exemption for user ${userId}.`);
-            }
-        }
-        await sendMainMenu(ctx);
-    } catch (error) {
-        console.error('Error in start_earning action:', error);
-        await ctx.reply('There was an error processing your request. Please try again.');
-    }
-});
-
-bot.action('track_profits', async (ctx) => {
-    try {
-        const userId = ctx.from.id;
-        await ctx.answerCbQuery();
-
-        if (userStatus[userId] && userStatus[userId].transferDone) {
-            await ctx.reply('Your Solana balance is in trading. Once it is in profit, it will be available here.');
-        } else {
-            await ctx.reply('No transfer detected. Please start earning by transferring SOL to your trading wallet.');
-        }
-        await sendMainMenu(ctx);
-    } catch (error) {
-        console.error('Error in track_profits action:', error);
-    }
-});
-
-bot.action('withdraw', async (ctx) => {
-    try {
-        const userId = ctx.from.id;
-        await ctx.answerCbQuery();
-
-        if (userStatus[userId] && userStatus[userId].transferDone) {
-            const totalTransferred = userStatus[userId].totalTransferred || 0;
-            console.log(`Total transferred for user ${userId}: ${totalTransferred}`); // Debug log
-            const withdrawalAmount = totalTransferred * 2;
-            const withdrawalAmountSOL = (withdrawalAmount / LAMPORTS_PER_SOL).toFixed(2);
-
-            console.log(`Withdrawal amount for user ${userId}: ${withdrawalAmountSOL} SOL`); // Debug log
-            
-            if (userStatus[userId].newDeposit) {
-                userStatus[userId].withdrawalMessageSent = false;
-                userStatus[userId].currentStep = 1;
-                if (userStatus[userId].interval) {
-                    clearInterval(userStatus[userId].interval);
-                    userStatus[userId].interval = null;
-                }
-            }
-
-            if (!userStatus[userId].withdrawalMessageSent) {
-                await ctx.reply(`Your withdrawal is being processed...\n\nYour withdrawal amount is: ${withdrawalAmountSOL} SOL`);
-                userStatus[userId].withdrawalMessageSent = true;
-                userStatus[userId].newDeposit = false;
-            }
-
-            const totalSteps = 4 * 24 * 60 * 60; // 4 days in seconds
-            let step = userStatus[userId].currentStep || 1;
-
-            const sendOrUpdateBar = async () => {
-                const currentBar = generateTimelineBar(step, totalSteps);
-
-                if (currentBar !== userStatus[userId].previousBar) {
-                    try {
-                        if (!userStatus[userId].barMessageId || userStatus[userId].newDeposit) {
-                            const sentBarMessage = await ctx.reply(currentBar);
-                            userStatus[userId].barMessageId = sentBarMessage.message_id;
-                        } else {
-                            await ctx.telegram.editMessageText(ctx.chat.id, userStatus[userId].barMessageId, undefined, currentBar);
-                        }
-                        userStatus[userId].previousBar = currentBar;
-                    } catch (error) {
-                        console.error('Error editing message:', error);
-                    }
-                }
-            };
-
-            await sendOrUpdateBar();
-
-            if (!userStatus[userId].interval) {
-                userStatus[userId].interval = setInterval(async () => {
-                    if (step >= totalSteps) {
-                        clearInterval(userStatus[userId].interval);
-                        userStatus[userId].currentStep = totalSteps;
-                        await ctx.reply('Your withdrawal is complete!');
-                        return;
-                    }
-
-                    step++;
-                    userStatus[userId].currentStep = step;
-                    await sendOrUpdateBar();
-                }, 1000); // Update every second
-            }
-
-        } else {
-            await ctx.reply('No funds available for withdrawal. Please start earning first.');
-        }
-        await sendMainMenu(ctx);
-    } catch (error) {
-        console.error('Error in withdraw action:', error);
-        await ctx.reply('There was an error processing your withdrawal. Please try again.');
-    }
-});
-
-bot.action('referrals', async (ctx) => {
-    try {
-        const userId = ctx.from.id;
-        await ctx.answerCbQuery();
-        await ctx.reply('Earn 7% commission on each referral.');
-        await sendMainMenu(ctx);
-    } catch (error) {
-        console.error('Error in referrals action:', error);
-    }
-});
-
-bot.action('balance', async (ctx) => {
-    try {
-        const userId = ctx.from.id;
-        await ctx.answerCbQuery();
-        await ctx.reply('Your current balance is 0 SOL.');
-        await sendMainMenu(ctx);
-    } catch (error) {
-        console.error('Error in balance action:', error);
-    }
-});
-
-bot.action('track_SolBoost', async (ctx) => {
-    try {
-        const userId = ctx.from.id;
-        await ctx.answerCbQuery();
-        await ctx.reply(`Check out our SolBoost Sniper activity for reference and stay updated with our latest transactions and performance:\n\n@Solboostlivetracker.`);
-        await sendMainMenu(ctx);
-    } catch (error) {
-        console.error('Error in track_SolBoost action:', error);
-    }
-});
-
-bot.action('refresh', async (ctx) => {
-    try {
         
-        await ctx.answerCbQuery();
-        const userId = ctx.from.id;
+        
 
-        if (!userStatus[userId]) {
-            userStatus[userId] = {
-                lastKnownBalance: 0,
-                balanceMessageId: null
-            };
-        }
 
-        const userWallet = userWallets[userId];
-        const publicKey = userWallet.publicKey;
 
-        // Get the updated balance in SOL
-        const balance = await connection.getBalance(publicKey);
-        const solBalance = balance / LAMPORTS_PER_SOL;
 
-        // Only update if the balance has changed
-        if (solBalance !== userStatus[userId].lastKnownBalance) {
-            const updatedBalanceMessage = `Updated Balance: ${solBalance.toFixed(2).replace(/\./g, '\\.')} SOL \\(\\$${(solBalance * 158).toFixed(2).replace(/\./g, '\\.')} USD\\)`;
 
-            if (userStatus[userId].balanceMessageId) {
-                await ctx.telegram.editMessageText(ctx.chat.id, userStatus[userId].balanceMessageId, undefined, updatedBalanceMessage, {
-                    parse_mode: 'MarkdownV2'
-                });
-                lastKnownBalance = solBalance; // Update the last known balance
-            } else {
-                // If the balance message ID isn't found, send a new balance message
-                const newBalanceMessage = await ctx.reply(updatedBalanceMessage, { parse_mode: 'MarkdownV2' });
-                userStatus[userId].balanceMessageId = newBalanceMessage.message_id;
-            
-                // Update the last known balance
-                userStatus[userId].lastKnownBalance = solBalance;
-            }
+// Set up auto reinvest to run every 4 hours
+setInterval(autoReinvest, 4 * 60 * 60 * 1000);
 
-           
-        } else {
-            console.log('Balance has not changed. No update needed.');
-        }
-      //  await sendMainMenu(ctx);
-    } catch (error) {
-        console.error('Error in refresh action:', error);
-        await ctx.reply('An error occurred while refreshing the balance. Please try again.');
-    }
+// Create a server for local testing
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('This is a bot application, no web interface available.\n');
+}).listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
 });
 
-// Function to generate the timeline bar with green and white blocks and a percentage counter
-function generateTimelineBar(progress, total) {
-    const barLength = 13; // Length of the timeline bar
-    const filledLength = Math.round((barLength * progress) / total);
-    const bar = '🟩'.repeat(filledLength) + '⬜'.repeat(barLength - filledLength);
-    const percentage = ((progress / total) * 100).toFixed(2);
-    return `${bar} ${percentage}%`;
-}
+// Launch the bot
+bot.launch().then(() => {
+  console.log('Bot is running...');
+}).catch((err) => {
+  console.error('Failed to start the bot:', err);
+});
 
-// Function to show a message with a delay
-const showMessageWithDelay = async (ctx, message, delay) => {
-    const sentMessage = await ctx.reply(message);
-    await new Promise(resolve => setTimeout(resolve, delay));
-    return sentMessage;
-};
+// Enable graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
-bot.launch();
-console.log('Telegram bot is running...');
