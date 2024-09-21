@@ -1039,7 +1039,7 @@ Deposit Date: ${depositDateTime.toLocaleDateString()}
 Current Balance: ${currentBalance.toFixed(2)} SOL
 Profit: ${profit.toFixed(2)} SOL
 
-Minimum withdrawal: 0.5 SOL
+Minimum withdrawal: 0.1 SOL
       `;
 
       const keyboard = Markup.inlineKeyboard([
@@ -1062,8 +1062,8 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
   const chatId = ctx.from.id;
   const profit = parseFloat(ctx.match[0].split('_')[2]);
 
-  if (isNaN(profit) || profit < 0.5) {
-    await ctx.answerCbQuery('Invalid or insufficient withdrawal amount. Minimum is 0.5 SOL');
+  if (isNaN(profit) || profit < 0.1) {
+    await ctx.answerCbQuery('Invalid or insufficient withdrawal amount. Minimum is 0.1 SOL');
     return;
   }
 
@@ -1325,7 +1325,7 @@ const getAdminStats = async () => {
 // Auto reinvest function
 const autoReinvest = async () => {
   try {
-    const query = 'SELECT chat_id, withdrawal_amount FROM users WHERE auto_reinvest = true AND withdrawal_amount >= 0.5';
+    const query = 'SELECT chat_id, withdrawal_amount FROM users WHERE auto_reinvest = true AND withdrawal_amount >= 0.1';
     const result = await pool.query(query);
 
     for (const row of result.rows) {
@@ -1585,7 +1585,7 @@ const checkAndProcessAutoWithdrawals = async () => {
       const currentBalance = calculateBalance(user.deposit_amount, user.last_profit_check);
       const profit = currentBalance - user.deposit_amount;
 
-      if (profit >= 0.5) {
+      if (profit >= 0.1) {
         await processWithdrawal(user.chat_id, profit, user.public_key);
         await client.query(
           'UPDATE users SET last_profit_check = CURRENT_TIMESTAMP WHERE chat_id = $1',
