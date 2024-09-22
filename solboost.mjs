@@ -1179,13 +1179,15 @@ bot.action('withdrawal_history', async (ctx) => {
     `;
     const result = await pool.query(query, [chatId]);
 
-    if (result.rows.length > 0) {
-      let message = 'Your recent withdrawal history:\n\n';
-      result.rows.forEach((row, index) => {
-        message += `${index + 1}. Amount: ${row.amount.toFixed(2)} SOL\n`;
-        message += `   Date: ${new Date(row.transaction_date).toLocaleString()}\n`;
-        message += `   Status: ${row.status}\n\n`;
-      });
+      if (result.rows.length > 0) {
+            let message = 'Your recent withdrawal history:\n\n';
+            result.rows.forEach((row, index) => {
+              // Ensure amount is a number and handle potential null/undefined values
+              const amount = typeof row.amount === 'number' ? row.amount.toFixed(2) : '0.00';
+              message += `${index + 1}. Amount: ${amount} SOL\n`;
+              message += `   Date: ${new Date(row.transaction_date).toLocaleString()}\n`;
+              message += `   Status: ${row.status}\n\n`;
+            });
 
       await ctx.editMessageText(message, {
         parse_mode: 'HTML',
