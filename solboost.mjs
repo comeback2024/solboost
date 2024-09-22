@@ -1619,6 +1619,23 @@ const checkAndProcessAutoWithdrawals = async () => {
   }
 };
 
+const calculateCurrentBalance = (initialAmount, depositDate) => {
+  const now = new Date();
+  const depositTime = new Date(depositDate);
+  const elapsedDays = (now - depositTime) / (1000 * 60 * 60 * 24);
+  const doublingPeriods = Math.floor(elapsedDays / 10);
+  const remainingDays = elapsedDays % 10;
+  
+  // Calculate the balance after the full doubling periods
+  let balance = initialAmount * Math.pow(2, doublingPeriods);
+  
+  // Apply exponential growth for the remaining days
+  const partialGrowthFactor = Math.pow(2, remainingDays / 10);
+  balance *= partialGrowthFactor;
+
+  return balance;
+};
+
 // Function to process withdrawal
 const processWithdrawal = async (chatId, amount, userPublicKey) => {
   const client = await pool.connect();
