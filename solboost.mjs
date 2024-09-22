@@ -41,6 +41,11 @@ const pool = new Pool({
   ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
 });
 
+bot.catch((err, ctx) => {
+  console.error(`Error while handling update ${ctx.update.update_id}:`, err);
+  // You can add more error handling logic here, such as notifying admins or logging to a service
+});
+
 // Logger setup
 const logger = winston.createLogger({
   level: 'info',
@@ -127,10 +132,10 @@ const safeAnswerCallbackQuery = async (ctx, text = '') => {
   try {
     await ctx.answerCbQuery(text);
   } catch (error) {
-    if (error.description.includes('query is too old')) {
+    if (error.description && error.description.includes('query is too old')) {
       console.log('Callback query expired:', error.description);
     } else {
-      throw error;
+      console.error('Error answering callback query:', error);
     }
   }
 };
@@ -880,7 +885,7 @@ bot.hears('Start Earning', async (ctx) => {
       bot.hears('Deposit', showDepositMenu);
 
 bot.action('deposit_history', async (ctx) => {
-  await ctx.answerCbQuery();
+    await safeAnswerCallbackQuery(ctx);
   const chatId = ctx.from.id;
 
   try {
@@ -982,7 +987,7 @@ bot.hears('Withdraw', async (ctx) => {
 
 });
 bot.action('auto_withdrawal', async (ctx) => {
-  await ctx.answerCbQuery();
+    await safeAnswerCallbackQuery(ctx);
   const chatId = ctx.from.id;
 
   try {
@@ -1240,7 +1245,7 @@ const recordWithdrawal = async (userId, amount, txSignature) => {
 };
 
 bot.action('back_to_withdraw', async (ctx) => {
-  await ctx.answerCbQuery();
+    await safeAnswerCallbackQuery(ctx);
   const withdrawKeyboard = Markup.inlineKeyboard([
     [Markup.button.callback('Auto Withdrawal', 'auto_withdrawal')],
     [Markup.button.callback('Manual Withdrawal', 'manual_withdrawal')],
@@ -1566,13 +1571,13 @@ scheduleReminders();
 
 // Add handlers for the inline keyboard buttons
 bot.action('deposit_now', async (ctx) => {
-  await ctx.answerCbQuery();
+    await safeAnswerCallbackQuery(ctx);
   // Implement your deposit logic here
   await ctx.reply('Great! Let\'s start your deposit process. Please follow these steps...');
 });
 
 bot.action('learn_more', async (ctx) => {
-  await ctx.answerCbQuery();
+    await safeAnswerCallbackQuery(ctx);
   await ctx.reply('Here\'s more information about our automated trading system and how it can help grow your investment...');
 });
 
@@ -1813,20 +1818,20 @@ For more detailed information, please check our documentation or join our Telegr
 
 // Handler for 'View Docs' button
 bot.action('view_docs', async (ctx) => {
-  await ctx.answerCbQuery();
+    await safeAnswerCallbackQuery(ctx);
   // You can either redirect to the 'Docs' menu option or provide a direct link
   await ctx.reply('You can find our detailed documentation here: [Your Docs URL]');
 });
 
 // Handler for 'Join Telegram' button
 bot.action('join_telegram', async (ctx) => {
-  await ctx.answerCbQuery();
+    await safeAnswerCallbackQuery(ctx);
   await ctx.reply('Join our Telegram group for discussions and updates: [Your Telegram Group URL]');
 });
 
 // Ensure you have the 'back_to_main_menu' handler as previously defined
 bot.action('back_to_main_menu', async (ctx) => {
-  await ctx.answerCbQuery();
+    await safeAnswerCallbackQuery(ctx);
   await sendMainMenu(ctx);
 });
         
@@ -1852,10 +1857,15 @@ http.createServer((req, res) => {
 bot.launch().then(() => {
   console.log('Bot is running...');
 }).catch((err) => {
-  console.error('Failed to start the bot:', err);
+  if (err.description && err.description.includes('query is too old')) {
+    console.log('Ignoring expired callback query at startup');
+    // Attempt to launch the bot again
+    return bot.launch();
+  } else {
+    console.error('Failed to start the bot:', err);
+  }
 });
 
 // Enable graceful stop
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
