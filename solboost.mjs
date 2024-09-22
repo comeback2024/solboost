@@ -336,7 +336,7 @@ const sendMainMenu = async (ctx) => {
 bot.command('start', async (ctx) => {
   const chatId = ctx.from.id;
   const firstName = ctx.from.first_name || 'User';
-  const startPayload = ctx.message.text.split(' ')[1]; // This will get any text after /start
+  const startPayload = ctx.message.text.split(' ')[1];
 
   try {
     let user = await getUser(chatId);
@@ -345,7 +345,6 @@ bot.command('start', async (ctx) => {
       const publicKey = wallet.publicKey.toString();
       const privateKey = bs58.encode(wallet.secretKey);
       
-      // Check if this is a referral
       let referrerId = null;
       if (startPayload && startPayload.startsWith('ref')) {
         referrerId = parseInt(startPayload.slice(3));
@@ -362,8 +361,8 @@ bot.command('start', async (ctx) => {
 
     A unique Solana wallet has been created for you.
      
-     <b>🔑 Wallet Address:</b> <code>${public_key}</code>
-     <b>💰 Balance :</b> 0
+     <b>🔑 Wallet Address:</b> <code>${user.public_key}</code>
+     <b>💰 Balance :</b> ${user.current_balance} SOL
 
      <b>Getting Started:</b>
 
@@ -393,7 +392,7 @@ SolBoost is an automated Solana trading bot that delivers 100% returns in 10 day
 A unique Solana wallet has been created for you.
  
  <b>🔑 Wallet Address:</b> <code>${user.public_key}</code>
- <b>Balance :</b> 0
+ <b>💰 Balance :</b> ${user.current_balance} SOL
 
  <b>Getting Started:</b>
 
@@ -419,7 +418,6 @@ Please use the options below to proceed:
     await ctx.reply('An error occurred while starting. Please try again later.');
   }
 });
-
 
 
 bot.hears('Referrals', async (ctx) => {
@@ -747,12 +745,13 @@ bot.hears('Balance', async (ctx) => {
       return ctx.reply('You haven\'t made any deposits yet.');
     }
 
-    const calculatedBalance = calculateCurrentBalance(deposit_amount, deposit_date);
-    const profit = calculatedBalance - deposit_amount;
+    const depositAmountNumber = parseFloat(deposit_amount);
+    const calculatedBalance = calculateCurrentBalance(depositAmountNumber, deposit_date);
+    const profit = calculatedBalance - depositAmountNumber;
 
     const message = `
 💰 Your Current Balance 💰
-Initial Deposit: ${deposit_amount.toFixed(8)} SOL
+Initial Deposit: ${depositAmountNumber.toFixed(8)} SOL
 Deposit Date: ${new Date(deposit_date).toLocaleDateString()}
 Current Balance: ${calculatedBalance.toFixed(8)} SOL
 Profit: ${profit.toFixed(8)} SOL
@@ -768,7 +767,6 @@ Last updated: ${new Date().toLocaleTimeString()}
     await ctx.reply('An error occurred while fetching your balance. Please try again.');
   }
 });
-
       bot.action('stop_balance_updates', async (ctx) => {
         try {
           clearBalanceInterval(ctx);
