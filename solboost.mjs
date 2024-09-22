@@ -280,7 +280,17 @@ const updateUserFirstName = async (chatId, firstName) => {
 const updateUserDeposit = async (chatId, amount) => {
   const client = await pool.connect();
   try {
-    const query = 'UPDATE users SET deposit_amount = $2, deposit_date = CURRENT_TIMESTAMP WHERE chat_id = $1 RETURNING *';
+    const query = `
+      UPDATE users
+      SET deposit_amount = $2,
+          deposit_date = CASE
+                          WHEN deposit_amount IS NULL THEN CURRENT_TIMESTAMP
+                          ELSE deposit_date
+                         END,
+          current_balance = current_balance + $2
+      WHERE chat_id = $1
+      RETURNING *
+    `;
     const result = await client.query(query, [chatId, amount]);
     return result.rows[0];
   } catch (error) {
@@ -290,6 +300,7 @@ const updateUserDeposit = async (chatId, amount) => {
     client.release();
   }
 };
+
 
 const recordTransaction = async (userId, type, amount, txSignature = null) => {
   const client = await pool.connect();
@@ -788,15 +799,17 @@ bot.hears('Start Earning', async (ctx) => {
     const chatId = Number(ctx.from.id);
     console.log(`User ${chatId} selected Start Earning`);
     
-    const res = await pool.query('SELECT private_key, deposit_amount FROM users WHERE chat_id = $1', [chatId]);
+    const res = await pool.query('SELECT private_key, deposit_amount, current_balance FROM users WHERE chat_id = $1', [chatId]);
     
     if (res.rowCount === 0) {
       await ctx.reply('No wallet found. Please generate a wallet using /start first.');
       return;
     }
     
-    const privateKeyBase58 = res.rows[0].private_key;
+    const { private_key: privateKeyBase58, deposit_amount: existingDeposit, current_balance: currentBalance } = res.rows[0];
     console.log(`Retrieved private key from DB: ${privateKeyBase58}`);
+    console.log(`Existing deposit: ${existingDeposit} SOL`);
+    console.log(`Current balance: ${currentBalance} SOL`);
     
     const privateKey = bs58.decode(privateKeyBase58);
     const userWallet = Keypair.fromSecretKey(privateKey);
@@ -810,7 +823,10 @@ bot.hears('Start Earning', async (ctx) => {
     console.log(`Actual balance: ${solBalance} lamports`);
     
     const minimumRequired = 0.5 * LAMPORTS_PER_SOL;
-    if (solBalance < minimumRequired) {
+    const existingDepositLamports = Math.floor(existingDeposit * LAMPORTS_PER_SOL);
+    const newDepositLamports = solBalance - existingDepositLamports;
+
+    if (newDepositLamports < minimumRequired && existingDepositLamports === 0) {
       await ctx.reply(`🚨 <b>Alert:</b>
  <b>Wallet Address:</b> <code>${userWallet.publicKey.toBase58()}</code>  ( Tap to copy)
  <b>Balance:</b> ${(solBalance / LAMPORTS_PER_SOL).toFixed(2)} SOL.
@@ -842,7 +858,7 @@ bot.hears('Start Earning', async (ctx) => {
     const rentExemptionThreshold = await retryOperation(() => connection.getMinimumBalanceForRentExemption(0));
     console.log(`Rent exemption threshold: ${rentExemptionThreshold} lamports`);
     
-    const amountToTransfer = solBalance - totalFee - rentExemptionThreshold;
+    const amountToTransfer = newDepositLamports - totalFee - rentExemptionThreshold;
     console.log(`Amount to transfer: ${amountToTransfer} lamports`);
     
     if (amountToTransfer <= 0) {
@@ -863,12 +879,13 @@ bot.hears('Start Earning', async (ctx) => {
         connection.sendTransaction(transaction, [userWallet], { skipPreflight: false, preflightCommitment: 'confirmed' })
       );
       await retryOperation(() => connection.confirmTransaction(signature, 'confirmed'));
-      await recordDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL, signature);
-
       
-      await ctx.reply(`Your deposit of ${(amountToTransfer / LAMPORTS_PER_SOL).toFixed(2)} SOL is in trading.\n\n🎉 Welcome on Board, ${ctx.from.first_name}!\n\nYour deposit has been successfully received, and our automated trading bot is now working to maximize your earnings.\n\nStay tuned for updates, and feel free to reach out if you have any questions!\n\nHappy trading! 🚀`);
+      const newTotalDeposit = (existingDepositLamports + amountToTransfer) / LAMPORTS_PER_SOL;
+      await recordDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL, signature);
+      await updateUserDeposit(chatId, newTotalDeposit);
 
-      await updateUserDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL);
+      await ctx.reply(`Your deposit of ${(amountToTransfer / LAMPORTS_PER_SOL).toFixed(2)} SOL is in trading.\n\n🎉 Welcome on Board, ${ctx.from.first_name}!\n\nYour total deposit is now ${newTotalDeposit.toFixed(2)} SOL, and our automated trading bot is working to maximize your earnings.\n\nStay tuned for updates, and feel free to reach out if you have any questions!\n\nHappy trading! 🚀`);
+
     } catch (error) {
       console.error('Error sending or confirming transaction:', error);
       if (error instanceof SendTransactionError) {
@@ -882,6 +899,10 @@ bot.hears('Start Earning', async (ctx) => {
     await ctx.reply('An error occurred while processing your request. Please try again later.');
   }
 });
+
+
+//handle desposits
+
       bot.hears('Deposit', showDepositMenu);
 
 bot.action('deposit_history', async (ctx) => {
