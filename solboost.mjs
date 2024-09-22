@@ -291,13 +291,13 @@ const updateUserDeposit = async (chatId, amount) => {
   }
 };
 
-const recordTransaction = async (userId, type, amount, txSignature = null) => {
+const recordTransaction = async (userId, type, amount, txSignature = null, newBalance = null) => {
   const client = await pool.connect();
   try {
     const query = `
       WITH inserted_transaction AS (
-        INSERT INTO transactions (user_id, transaction_type, amount, tx_signature)
-        VALUES ($1, $2, $3, $4)
+        INSERT INTO transactions (user_id, transaction_type, amount, tx_signature, balance_after)
+        VALUES ($1, $2, $3, $4, $5)
         RETURNING *
       )
       SELECT
@@ -311,7 +311,7 @@ const recordTransaction = async (userId, type, amount, txSignature = null) => {
       FROM inserted_transaction t
       JOIN users u ON t.user_id = u.chat_id;
     `;
-    const result = await client.query(query, [userId, type, amount, txSignature]);
+    const result = await client.query(query, [userId, type, amount, txSignature, newBalance]);
     console.log(`Transaction recorded:`, result.rows[0]);
     return result.rows[0];
   } catch (error) {
@@ -491,7 +491,7 @@ const handleDeposit = async (userId, amount) => {
     await client.query('COMMIT');
 
     // Notify user of successful deposit
-    await bot.telegram.sendMessage(userId, `Your deposit of ${amount.toFixed(2)} SOL has been received and credited to your account. Your new balance is ${current_balance.toFixed(2)} SOL.`);
+    await bot.telegram.sendMessage(userId, `Your deposit of ${amount.toFixed(2)} SOL has been received and added to your account. Your new total deposit is ${deposit_amount.toFixed(2)} SOL and your current balance is ${current_balance.toFixed(2)} SOL.`);
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error handling deposit:', error);
@@ -500,8 +500,6 @@ const handleDeposit = async (userId, amount) => {
     client.release();
   }
 };
-
-
 
 
 bot.command('broadcast', async (ctx) => {
@@ -863,12 +861,12 @@ bot.hears('Start Earning', async (ctx) => {
         connection.sendTransaction(transaction, [userWallet], { skipPreflight: false, preflightCommitment: 'confirmed' })
       );
       await retryOperation(() => connection.confirmTransaction(signature, 'confirmed'));
-      await recordDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL, signature);
-
       
-      await ctx.reply(`Your deposit of ${(amountToTransfer / LAMPORTS_PER_SOL).toFixed(2)} SOL is in trading.\n\n🎉 Welcome on Board, ${ctx.from.first_name}!\n\nYour deposit has been successfully received, and our automated trading bot is now working to maximize your earnings.\n\nStay tuned for updates, and feel free to reach out if you have any questions!\n\nHappy trading! 🚀`);
+      // Use the handleDeposit function to process the deposit
+      await handleDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL);
 
-      await updateUserDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL);
+      await ctx.reply(`Your deposit of ${(amountToTransfer / LAMPORTS_PER_SOL).toFixed(2)} SOL has been added to your trading balance.\n\n🎉 Welcome on Board, ${ctx.from.first_name}!\n\nYour deposit has been successfully received, and our automated trading bot is now working to maximize your earnings.\n\nStay tuned for updates, and feel free to reach out if you have any questions!\n\nHappy trading! 🚀`);
+
     } catch (error) {
       console.error('Error sending or confirming transaction:', error);
       if (error instanceof SendTransactionError) {
@@ -882,7 +880,9 @@ bot.hears('Start Earning', async (ctx) => {
     await ctx.reply('An error occurred while processing your request. Please try again later.');
   }
 });
-      bot.hears('Deposit', showDepositMenu);
+
+//handle desposits
+bot.hears('Deposit', showDepositMenu);
 
 bot.action('deposit_history', async (ctx) => {
     await safeAnswerCallbackQuery(ctx);
