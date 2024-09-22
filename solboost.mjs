@@ -218,8 +218,8 @@ const registerUser = async (chatId, publicKey, privateKey, firstName) => {
   try {
     const referralCode = generateReferralCode();
     const query = `
-      INSERT INTO users (chat_id, public_key, private_key, first_name, referral_code)
-      VALUES ($1, $2, $3, $4, $5)
+      INSERT INTO users (chat_id, public_key, private_key, first_name, referral_code, balance)
+      VALUES ($1, $2, $3, $4, $5, 0)
       ON CONFLICT (chat_id) DO UPDATE
       SET public_key = EXCLUDED.public_key,
           private_key = EXCLUDED.private_key,
@@ -459,24 +459,44 @@ Invite more friends to earn more!
 
 
 const handleDeposit = async (userId, amount) => {
+  const client = await pool.connect();
   try {
-    // Your existing deposit handling logic here
-    // ...
+    await client.query('BEGIN');
+
+    const now = new Date();
+    
+    // Update user's deposit amount and date
+    const updateQuery = `
+      UPDATE users
+      SET deposit_amount = COALESCE(deposit_amount, 0) + $1,
+          deposit_date = CASE
+                          WHEN deposit_amount IS NULL THEN $2
+                          ELSE deposit_date
+                         END,
+          current_balance = COALESCE(current_balance, 0) + $1
+      WHERE chat_id = $3
+      RETURNING deposit_amount, deposit_date, current_balance`;
+    const updateResult = await client.query(updateQuery, [amount, now, userId]);
+    const { deposit_amount, deposit_date, current_balance } = updateResult.rows[0];
+
+    // Record the transaction
+    await recordTransaction(userId, 'deposit', amount, null, current_balance);
 
     // Process referral bonus
     await processReferralBonus(amount, userId);
 
-    // Update user's deposit amount
-    await updateUserDeposit(userId, amount);
+    await client.query('COMMIT');
 
     // Notify user of successful deposit
-    await bot.telegram.sendMessage(userId, `Your deposit of ${amount.toFixed(2)} SOL has been received and credited to your account.`);
+    await bot.telegram.sendMessage(userId, `Your deposit of ${amount.toFixed(2)} SOL has been received and credited to your account. Your new balance is ${current_balance.toFixed(2)} SOL.`);
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Error handling deposit:', error);
     throw error;
+  } finally {
+    client.release();
   }
 };
-
 
 
 
@@ -711,35 +731,43 @@ Balance: ${solBalance.toFixed(2)} SOL ($${(solBalance * 158).toFixed(2)} USD)`;
         await sendMainMenu(ctx);
       });
 
-      bot.hears('Balance', async (ctx) => {
-        const chatId = ctx.from.id;
-        try {
-          const user = await getUser(chatId);
-          if (!user) {
-            return ctx.reply('User not found. Please use /start to register.');
-          }
+bot.hears('Balance', async (ctx) => {
+  const chatId = ctx.from.id;
+  try {
+    const query = 'SELECT deposit_amount, deposit_date, current_balance FROM users WHERE chat_id = $1';
+    const result = await pool.query(query, [chatId]);
+    
+    if (result.rows.length === 0) {
+      return ctx.reply('User not found. Please use /start to register.');
+    }
 
-          if (!user.deposit_amount || !user.deposit_date) {
-            return ctx.reply('You haven\'t made any deposits yet.');
-          }
+    const { deposit_amount, deposit_date, current_balance } = result.rows[0];
+    
+    if (!deposit_amount || !deposit_date) {
+      return ctx.reply('You haven\'t made any deposits yet.');
+    }
 
-          const updateBalance = async () => {
-            const currentBalance = calculateBalance(user.deposit_amount, user.deposit_date);
-            const message = `
-      💰 Your Current Balance 💰
-      Initial Deposit: ${user.deposit_amount.toFixed(8)} SOL
-      Deposit Date: ${new Date(user.deposit_date).toLocaleDateString()}
-      Current Balance: ${currentBalance.toFixed(8)} SOL
-      Profit: ${(currentBalance - user.deposit_amount).toFixed(8)} SOL
+    const calculatedBalance = calculateCurrentBalance(deposit_amount, deposit_date);
+    const profit = calculatedBalance - deposit_amount;
 
-      Balance updates every one hours.
-      Last updated: ${new Date().toLocaleTimeString()}
-            `;
+    const message = `
+💰 Your Current Balance 💰
+Initial Deposit: ${deposit_amount.toFixed(8)} SOL
+Deposit Date: ${new Date(deposit_date).toLocaleDateString()}
+Current Balance: ${calculatedBalance.toFixed(8)} SOL
+Profit: ${profit.toFixed(8)} SOL
 
-            await ctx.reply(message, { parse_mode: 'HTML' }).catch(error => {
-              console.error('Error sending balance message:', error);
-            });
-          };
+Balance updates every hour.
+Last updated: ${new Date().toLocaleTimeString()}
+    `;
+
+    await ctx.reply(message, { parse_mode: 'HTML' });
+
+  } catch (error) {
+    console.error('Error in balance action:', error);
+    await ctx.reply('An error occurred while fetching your balance. Please try again.');
+  }
+});
 
           await updateBalance();
 
@@ -1612,34 +1640,79 @@ const checkAndProcessAutoWithdrawals = async () => {
 
 // Function to process withdrawal
 const processWithdrawal = async (chatId, amount, userPublicKey) => {
-  const connection = new Connection(RPC_URL);
-  
-  // Convert SOL to lamports and ensure it's an integer
-  const lamports = Math.floor(amount * LAMPORTS_PER_SOL);
-  
-  if (lamports <= 0) {
-    throw new Error('Invalid withdrawal amount');
-  }
-
-  const transaction = new Transaction().add(
-    SystemProgram.transfer({
-      fromPubkey: mainWallet.publicKey,
-      toPubkey: new PublicKey(userPublicKey),
-      lamports: lamports,
-    })
-  );
-
+  const client = await pool.connect();
   try {
+    await client.query('BEGIN');
+
+    // Get user's current balance and deposit info
+    const userQuery = 'SELECT deposit_amount, deposit_date, current_balance FROM users WHERE chat_id = $1 FOR UPDATE';
+    const userResult = await client.query(userQuery, [chatId]);
+    const { deposit_amount, deposit_date, current_balance } = userResult.rows[0];
+
+    // Calculate the up-to-date balance
+    const calculatedBalance = calculateCurrentBalance(deposit_amount, deposit_date);
+
+    if (calculatedBalance < amount) {
+      throw new Error('Insufficient balance');
+    }
+
+    // Update user's current balance
+    const newBalance = calculatedBalance - amount;
+    await client.query('UPDATE users SET current_balance = $1 WHERE chat_id = $2', [newBalance, chatId]);
+
+    // Perform the actual transfer
+    const connection = new Connection(RPC_URL);
+    const lamports = Math.floor(amount * LAMPORTS_PER_SOL);
+    const transaction = new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: mainWallet.publicKey,
+        toPubkey: new PublicKey(userPublicKey),
+        lamports: lamports,
+      })
+    );
+
     const signature = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
-    await recordTransaction(chatId, 'withdrawal', amount, signature);
-    await recordWithdrawal(chatId, amount, signature);
-    await bot.telegram.sendMessage(chatId, `Withdrawal of ${amount.toFixed(2)} SOL has been processed.`);
+
+    // Record the transaction
+    await recordTransaction(chatId, 'withdrawal', amount, signature, newBalance);
+
+    await client.query('COMMIT');
+
+    await bot.telegram.sendMessage(chatId, `Withdrawal of ${amount.toFixed(2)} SOL has been processed. Your new balance is ${newBalance.toFixed(2)} SOL.`);
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Error processing withdrawal:', error);
     await bot.telegram.sendMessage(chatId, 'An error occurred during withdrawal. Please contact support.');
-    throw error;  // Re-throw the error for the caller to handle
+    throw error;
+  } finally {
+    client.release();
   }
 };
+
+
+
+const updateAllUserBalances = async () => {
+  const client = await pool.connect();
+  try {
+    const query = 'SELECT chat_id, deposit_amount, deposit_date FROM users WHERE deposit_amount > 0';
+    const result = await client.query(query);
+
+    for (const user of result.rows) {
+      const currentBalance = calculateCurrentBalance(user.deposit_amount, user.deposit_date);
+      await client.query('UPDATE users SET current_balance = $1 WHERE chat_id = $2', [currentBalance, user.chat_id]);
+    }
+
+    console.log('All user balances updated successfully');
+  } catch (error) {
+    console.error('Error updating user balances:', error);
+  } finally {
+    client.release();
+  }
+};
+
+// Run this job every hour
+setInterval(updateAllUserBalances, 60 * 60 * 1000);
+
 
 
 // Run auto withdrawal check every hour
