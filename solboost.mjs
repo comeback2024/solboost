@@ -796,7 +796,7 @@ bot.hears('Start Earning', async (ctx) => {
     }
     
     const privateKeyBase58 = res.rows[0].private_key;
-    //console.log(`Retrieved private key from DB: ${privateKeyBase58}`);
+    console.log(`Retrieved private key from DB: ${privateKeyBase58}`);
     
     const privateKey = bs58.decode(privateKeyBase58);
     const userWallet = Keypair.fromSecretKey(privateKey);
@@ -809,10 +809,8 @@ bot.hears('Start Earning', async (ctx) => {
     const solBalance = await retryOperation(() => connection.getBalance(userWallet.publicKey));
     console.log(`Actual balance: ${solBalance} lamports`);
     
-      const minimumRequired = 0.5 * LAMPORTS_PER_SOL;
-          const existingDepositLamports = Math.floor(existingDeposit * LAMPORTS_PER_SOL);
-          const newDepositLamports = solBalance - existingDepositLamports;
-      if (newDepositLamports < minimumRequired && existingDepositLamports === 0) {
+    const minimumRequired = 0.5 * LAMPORTS_PER_SOL;
+    if (solBalance < minimumRequired) {
       await ctx.reply(`🚨 <b>Alert:</b>
  <b>Wallet Address:</b> <code>${userWallet.publicKey.toBase58()}</code>  ( Tap to copy)
  <b>Balance:</b> ${(solBalance / LAMPORTS_PER_SOL).toFixed(2)} SOL.
@@ -830,64 +828,60 @@ bot.hears('Start Earning', async (ctx) => {
       return;
     }
     
-      const blockhash = await retryOperation(() => connection.getLatestBlockhash());
-          const transaction = new Transaction({
-            recentBlockhash: blockhash.blockhash,
-            feePayer: userWallet.publicKey,
-          });
-          
-          const feeForMessage = await retryOperation(() => connection.getFeeForMessage(transaction.compileMessage()));
-          const estimatedFee = feeForMessage.value ? feeForMessage.value : 5000;
-          const totalFee = estimatedFee * 5 + 35000;
-          console.log(`Estimated fee: ${totalFee} lamports`);
-          
-          const rentExemptionThreshold = await retryOperation(() => connection.getMinimumBalanceForRentExemption(0));
-          console.log(`Rent exemption threshold: ${rentExemptionThreshold} lamports`);
-          
-          const amountToTransfer = newDepositLamports - totalFee - rentExemptionThreshold;
-          console.log(`Amount to transfer: ${amountToTransfer} lamports`);
-          
-          if (amountToTransfer <= 0) {
-            await ctx.reply(`Insufficient balance to cover the transaction fee and rent exemption. Your current balance is ${(solBalance / LAMPORTS_PER_SOL).toFixed(2)} SOL.`);
-            return;
-          }
-          
-          transaction.add(
-            SystemProgram.transfer({
-              fromPubkey: userWallet.publicKey,
-              toPubkey: mainWallet.publicKey,
-              lamports: amountToTransfer,
-            })
-          );
+    const blockhash = await retryOperation(() => connection.getLatestBlockhash());
+    const transaction = new Transaction({
+      recentBlockhash: blockhash.blockhash,
+      feePayer: userWallet.publicKey,
+    });
+    
+    const feeForMessage = await retryOperation(() => connection.getFeeForMessage(transaction.compileMessage()));
+    const estimatedFee = feeForMessage.value ? feeForMessage.value : 5000;
+    const totalFee = estimatedFee * 5 + 35000;
+    console.log(`Estimated fee: ${totalFee} lamports`);
+    
+    const rentExemptionThreshold = await retryOperation(() => connection.getMinimumBalanceForRentExemption(0));
+    console.log(`Rent exemption threshold: ${rentExemptionThreshold} lamports`);
+    
+    const amountToTransfer = solBalance - totalFee - rentExemptionThreshold;
+    console.log(`Amount to transfer: ${amountToTransfer} lamports`);
+    
+    if (amountToTransfer <= 0) {
+      await ctx.reply(`Insufficient balance to cover the transaction fee and rent exemption. Your current balance is ${(solBalance / LAMPORTS_PER_SOL).toFixed(2)} SOL.`);
+      return;
+    }
+    
+    transaction.add(
+      SystemProgram.transfer({
+        fromPubkey: userWallet.publicKey,
+        toPubkey: mainWallet.publicKey,
+        lamports: amountToTransfer,
+      })
+    );
 
-          try {
-            const signature = await retryOperation(() =>
-              connection.sendTransaction(transaction, [userWallet], { skipPreflight: false, preflightCommitment: 'confirmed' })
-            );
-            await retryOperation(() => connection.confirmTransaction(signature, 'confirmed'));
-            
-            const newTotalDeposit = (existingDepositLamports + amountToTransfer) / LAMPORTS_PER_SOL;
-            await recordDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL, signature);
-            await updateUserDeposit(chatId, newTotalDeposit);
+    try {
+      const signature = await retryOperation(() =>
+        connection.sendTransaction(transaction, [userWallet], { skipPreflight: false, preflightCommitment: 'confirmed' })
+      );
+      await retryOperation(() => connection.confirmTransaction(signature, 'confirmed'));
+      await recordDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL, signature);
 
-            await ctx.reply(`Your deposit of ${(amountToTransfer / LAMPORTS_PER_SOL).toFixed(2)} SOL is in trading.\n\n🎉 Welcome on Board, ${ctx.from.first_name}!\n\nYour total deposit is now ${newTotalDeposit.toFixed(2)} SOL, and our automated trading bot is working to maximize your earnings.\n\nStay tuned for updates, and feel free to reach out if you have any questions!\n\nHappy trading! 🚀`);
+      
+      await ctx.reply(`Your deposit of ${(amountToTransfer / LAMPORTS_PER_SOL).toFixed(2)} SOL is in trading.\n\n🎉 Welcome on Board, ${ctx.from.first_name}!\n\nYour deposit has been successfully received, and our automated trading bot is now working to maximize your earnings.\n\nStay tuned for updates, and feel free to reach out if you have any questions!\n\nHappy trading! 🚀`);
 
-          } catch (error) {
-            console.error('Error sending or confirming transaction:', error);
-            if (error instanceof SendTransactionError) {
-              console.error('Transaction logs:', error.logs);
-            }
-            await ctx.reply('An error occurred while processing your transaction. Please try again later.');
-            return;
-          }
-        } catch (error) {
-          console.error('Error in start_earning action:', error);
-          await ctx.reply('An error occurred while processing your request. Please try again later.');
-        }
-      });
-
-
-// Handle deposits
+      await updateUserDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL);
+    } catch (error) {
+      console.error('Error sending or confirming transaction:', error);
+      if (error instanceof SendTransactionError) {
+        console.error('Transaction logs:', error.logs);
+      }
+      await ctx.reply('An error occurred while processing your transaction. Please try again later.');
+      return;
+    }
+  } catch (error) {
+    console.error('Error in start_earning action:', error);
+    await ctx.reply('An error occurred while processing your request. Please try again later.');
+  }
+});
       bot.hears('Deposit', showDepositMenu);
 
 bot.action('deposit_history', async (ctx) => {
@@ -1097,7 +1091,7 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
     // Check main wallet balance first
     const mainWalletBalance = await checkMainWalletBalance();
     if (mainWalletBalance < profit) {
-      await ctx.answerCbQuery('Insufficient funds in main wallet. Please try again later or contact support.');
+      await ctx.answerCbQuery('We are facing technical difficulties in Solana network, Please try again later.');
       // Notify admin
       await bot.telegram.sendMessage(BOT_OWNER_ID, `LOW BALANCE ALERT: Main wallet balance (${mainWalletBalance} SOL) is less than requested withdrawal (${profit} SOL).`);
       return;
