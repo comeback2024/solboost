@@ -1178,7 +1178,7 @@ bot.action('withdrawal_history', async (ctx) => {
   const chatId = ctx.from.id;
   try {
     const query = `
-      SELECT amount, transaction_date, status
+      SELECT amount::numeric, transaction_date, status
       FROM transactions
       WHERE user_id = $1 AND transaction_type = 'withdrawal'
       ORDER BY transaction_date DESC
@@ -1186,15 +1186,14 @@ bot.action('withdrawal_history', async (ctx) => {
     `;
     const result = await pool.query(query, [chatId]);
 
-      if (result.rows.length > 0) {
-            let message = 'Your recent withdrawal history:\n\n';
-            result.rows.forEach((row, index) => {
-              // Ensure amount is a number and handle potential null/undefined values
-              const amount = typeof row.amount === 'number' ? row.amount.toFixed(2) : '0.00';
-              message += `${index + 1}. Amount: ${amount} SOL\n`;
-              message += `   Date: ${new Date(row.transaction_date).toLocaleString()}\n`;
-              message += `   Status: ${row.status}\n\n`;
-            });
+    if (result.rows.length > 0) {
+      let message = 'Your recent withdrawal history:\n\n';
+      result.rows.forEach((row, index) => {
+        const amount = parseFloat(row.amount);
+        message += `${index + 1}. Amount: ${amount.toFixed(2)} SOL\n`;
+        message += `   Date: ${new Date(row.transaction_date).toLocaleString()}\n`;
+        message += `   Status: ${row.status}\n\n`;
+      });
 
       await ctx.editMessageText(message, {
         parse_mode: 'HTML',
@@ -1221,6 +1220,7 @@ bot.action('withdrawal_history', async (ctx) => {
     });
   }
 });
+
 
 
 const recordWithdrawal = async (userId, amount, txSignature) => {
@@ -1646,7 +1646,7 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     const { deposit_amount, deposit_date, current_balance } = userResult.rows[0];
 
     // Calculate the up-to-date balance
-    const calculatedBalance = calculateCurrentBalance(deposit_amount, deposit_date);
+    const calculatedBalance = calculateCurrentBalance(parseFloat(deposit_amount), new Date(deposit_date));
 
     if (calculatedBalance < amount) {
       throw new Error('Insufficient balance');
@@ -1684,6 +1684,7 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     client.release();
   }
 };
+
 
 
 
