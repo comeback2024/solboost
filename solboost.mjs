@@ -7,6 +7,8 @@ import dotenv from 'dotenv';
 import http from 'http';
 import winston from 'winston';
 import schedule from 'node-schedule';
+import { sendAndConfirmTransaction } from '@solana/web3.js';
+
 
 // Load environment variables
 dotenv.config();
