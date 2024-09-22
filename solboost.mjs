@@ -108,11 +108,15 @@ const calculateBalance = (initialAmount, depositDate) => {
   const doublingPeriods = Math.floor(elapsedDays / 10);
   const remainingDays = elapsedDays % 10;
   
-  let balance = initialAmount * Math.pow(2, doublingPeriods);
-  balance += (balance / 10) * (remainingDays / 10);
-  
-  return balance;
-};
+    // Calculate the balance after the full doubling periods
+      let balance = initialAmount * Math.pow(2, doublingPeriods);
+      
+      // Apply exponential growth for the remaining days
+      const partialGrowthFactor = Math.pow(2, remainingDays / 10);
+      balance *= partialGrowthFactor; // Apply partial growth for remaining days
+
+      return balance.toFixed(8); // Return balance with 8 decimal places for precision
+    };
 
 // Helper functions
 
