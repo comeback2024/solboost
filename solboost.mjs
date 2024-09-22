@@ -769,25 +769,6 @@ Last updated: ${new Date().toLocaleTimeString()}
   }
 });
 
-          await updateBalance();
-
-          const intervalId = setInterval(updateBalance, 60 * 60 * 1000);
-
-          ctx.session = ctx.session || {};
-          ctx.session.balanceIntervalId = intervalId;
-
-          await ctx.reply('Click the button below to stop balance updates:',
-            Markup.inlineKeyboard([
-              Markup.button.callback('Stop Balance Updates', 'stop_balance_updates')
-            ])
-          );
-
-        } catch (error) {
-          console.error('Error in balance action:', error);
-          await ctx.reply('An error occurred while fetching your balance. Please try again.');
-        }
-      });
-
       bot.action('stop_balance_updates', async (ctx) => {
         try {
           clearBalanceInterval(ctx);
