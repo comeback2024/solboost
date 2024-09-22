@@ -1077,17 +1077,26 @@ Minimum withdrawal: 0.1 SOL
 
 
 bot.action(/^withdraw_profit_/, async (ctx) => {
-    console.log('Callback data:', ctx.match);
+  console.log('Callback data:', ctx.match);
   const chatId = ctx.from.id;
-//  const profit = parseFloat(ctx.match[0].split('_')[2]);
-    const profit = parseFloat(ctx.match.input.split('_')[2]);
-    console.log('Extracted profit:', profit);
+  const profit = parseFloat(ctx.match.input.split('_')[2]);
+  console.log('Extracted profit:', profit);
+  
   if (isNaN(profit) || profit < 0.1) {
     await ctx.answerCbQuery('Invalid or insufficient withdrawal amount. Minimum is 0.1 SOL');
     return;
   }
 
   try {
+    // Check main wallet balance first
+    const mainWalletBalance = await checkMainWalletBalance();
+    if (mainWalletBalance < profit) {
+      await ctx.answerCbQuery('Insufficient funds in main wallet. Please try again later or contact support.');
+      // Notify admin
+      await bot.telegram.sendMessage(BOT_OWNER_ID, `LOW BALANCE ALERT: Main wallet balance (${mainWalletBalance} SOL) is less than requested withdrawal (${profit} SOL).`);
+      return;
+    }
+
     const result = await pool.query('SELECT public_key FROM users WHERE chat_id = $1', [chatId]);
     if (result.rows.length === 0) {
       await ctx.answerCbQuery('User not found. Please use /start to register.');
@@ -1645,6 +1654,12 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
   try {
     await client.query('BEGIN');
 
+    const connection = new Connection(RPC_URL);
+    
+    // Log main wallet balance
+    const mainWalletBalance = await connection.getBalance(mainWallet.publicKey);
+    console.log(`Main wallet balance: ${mainWalletBalance / LAMPORTS_PER_SOL} SOL`);
+
     // Get user's current balance and deposit info
     const userQuery = 'SELECT deposit_amount, deposit_date, current_balance FROM users WHERE chat_id = $1 FOR UPDATE';
     const userResult = await client.query(userQuery, [chatId]);
@@ -1652,17 +1667,14 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
 
     // Calculate the up-to-date balance
     const calculatedBalance = calculateCurrentBalance(parseFloat(deposit_amount), new Date(deposit_date));
+    console.log(`User calculated balance: ${calculatedBalance} SOL`);
+    console.log(`Withdrawal amount: ${amount} SOL`);
 
     if (calculatedBalance < amount) {
-      throw new Error('Insufficient balance');
+      throw new Error('Insufficient user balance');
     }
 
-    // Update user's current balance
-    const newBalance = calculatedBalance - amount;
-    await client.query('UPDATE users SET current_balance = $1 WHERE chat_id = $2', [newBalance, chatId]);
-
     // Perform the actual transfer
-    const connection = new Connection(RPC_URL);
     const lamports = Math.floor(amount * LAMPORTS_PER_SOL);
     const transaction = new Transaction().add(
       SystemProgram.transfer({
@@ -1672,18 +1684,34 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
       })
     );
 
+    // Estimate transaction fee
+    const { feeCalculator } = await connection.getRecentBlockhash();
+    const estimatedFee = await connection.getFeeForMessage(transaction.compileMessage());
+    console.log(`Estimated transaction fee: ${estimatedFee} lamports`);
+
+    // Check if main wallet has enough balance including fee
+    if (mainWalletBalance < lamports + estimatedFee) {
+      throw new Error(`Insufficient funds in main wallet. Available: ${mainWalletBalance}, Required: ${lamports + estimatedFee}`);
+    }
+
     const signature = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
 
     // Record the transaction
-    await recordTransaction(chatId, 'withdrawal', amount, signature, newBalance);
+    await recordTransaction(chatId, 'withdrawal', amount, signature, calculatedBalance - amount);
 
     await client.query('COMMIT');
 
-    await bot.telegram.sendMessage(chatId, `Withdrawal of ${amount.toFixed(2)} SOL has been processed. Your new balance is ${newBalance.toFixed(2)} SOL.`);
+    await bot.telegram.sendMessage(chatId, `Withdrawal of ${amount.toFixed(2)} SOL has been processed. Your new balance is ${(calculatedBalance - amount).toFixed(2)} SOL.`);
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error processing withdrawal:', error);
-    await bot.telegram.sendMessage(chatId, 'An error occurred during withdrawal. Please contact support.');
+    if (error instanceof SendTransactionError) {
+      console.error('Transaction error details:', error.logs);
+    }
+    await bot.telegram.sendMessage(chatId, 'An error occurred during withdrawal. Please try again later or contact support.');
+    // Notify admin about the error
+    const adminMessage = `Error processing withdrawal for user ${chatId}: ${error.message}`;
+    await bot.telegram.sendMessage(BOT_OWNER_ID, adminMessage);
     throw error;
   } finally {
     client.release();
@@ -1691,6 +1719,18 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
 };
 
 
+const checkMainWalletBalance = async () => {
+  try {
+    const connection = new Connection(RPC_URL);
+    const balance = await connection.getBalance(mainWallet.publicKey);
+    const solBalance = balance / LAMPORTS_PER_SOL;
+    console.log(`Current main wallet balance: ${solBalance} SOL`);
+    return solBalance;
+  } catch (error) {
+    console.error('Error checking main wallet balance:', error);
+    throw error;
+  }
+};
 
 
 const updateAllUserBalances = async () => {
