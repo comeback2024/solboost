@@ -115,7 +115,7 @@ const calculateBalance = (initialAmount, depositDate) => {
       const partialGrowthFactor = Math.pow(2, remainingDays / 10);
       balance *= partialGrowthFactor; // Apply partial growth for remaining days
 
-      return balance.toFixed(8); // Return balance with 8 decimal places for precision
+      return balance; // Return balance with 8 decimal places for precision
     };
 
 // Helper functions
