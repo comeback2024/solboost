@@ -1065,7 +1065,7 @@ Minimum withdrawal: 0.1 SOL
 bot.action(/^withdraw_profit_/, async (ctx) => {
   const chatId = ctx.from.id;
   const profit = parseFloat(ctx.match[0].split('_')[2]);
-
+    console.log('Extracted profit:', profit);
   if (isNaN(profit) || profit < 0.1) {
     await ctx.answerCbQuery('Invalid or insufficient withdrawal amount. Minimum is 0.1 SOL');
     return;
