@@ -1094,43 +1094,39 @@ With Auto Withdraw, your profits are automatically transferred to your generated
 bot.action('manual_withdrawal', async (ctx) => {
   const chatId = ctx.from.id;
   try {
-    // Acknowledge the callback query to Telegram
     await safeAnswerCallbackQuery(ctx, 'Processing your withdrawal request...');
 
-    // Fetch user balance data (deposit amount, deposit date, current balance, profit)
-    const { depositAmount, depositDate, currentBalance, profit } = await getUserBalance(chatId);
+    // Get user balance details including last withdrawal date
+    const { depositAmount, depositDate, currentBalance, profit, lastWithdrawalDate } = await getUserBalance(chatId);
 
-    // Ensure depositDate is properly formatted as a Date object
-    const depositDateTime = new Date(depositDate);
+    // Calculate profit using the new logic
+    const calculatedProfit = calculateProfit(depositAmount, depositDate, lastWithdrawalDate);
 
-    // Prepare the message with financial details
     const message = `
 With Manual Withdraw, you have complete control over withdrawing your profits. You can manually select the amount of SOL you wish to withdraw from your profits at any time.
       
 Deposit Amount: ${depositAmount.toFixed(2)} SOL
-Deposit Date: ${depositDateTime.toLocaleDateString()}
+Deposit Date: ${new Date(depositDate).toLocaleDateString()}
 Current Balance: ${currentBalance.toFixed(2)} SOL
-Profit: ${profit.toFixed(2)} SOL
+Profit: ${calculatedProfit.toFixed(2)} SOL
 
 Minimum withdrawal: 0.1 SOL
     `;
 
     // Construct the inline keyboard
     const keyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('Withdraw Profit', `withdraw_profit_${profit.toFixed(8)}`)],
+      [Markup.button.callback('Withdraw Profit', `withdraw_profit_${calculatedProfit.toFixed(8)}`)],
       [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
     ]);
 
-    // Send the message with the inline keyboard attached
-    await ctx.editMessageText(message, {
-      parse_mode: 'HTML', // Use HTML formatting in the message
-      reply_markup: keyboard.reply_markup // Attach the keyboard properly
-    });
+    // Send the updated message
+    await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard });
   } catch (error) {
     console.error('Error in manual withdrawal:', error);
     await ctx.answerCbQuery('An error occurred. Please try again.');
   }
 });
+
 
 
 
@@ -1178,8 +1174,8 @@ async function processWithdrawalBackground(chatId, amount) {
       return;
     }
 
-    // Step 3: Fetch user's public key and balances
-    const result = await pool.query('SELECT public_key, deposit_amount, current_balance FROM users WHERE chat_id = $1', [chatId]);
+    // Step 3: Fetch user's public key, balances, and last withdrawal date
+    const result = await pool.query('SELECT public_key, deposit_amount, current_balance, last_withdrawal_date FROM users WHERE chat_id = $1', [chatId]);
     if (result.rows.length === 0) {
       await bot.telegram.sendMessage(chatId, 'User not found. Please use /start to register.');
       locks.delete(chatId); // Release the lock in case of failure
@@ -1189,6 +1185,9 @@ async function processWithdrawalBackground(chatId, amount) {
     const userPublicKey = result.rows[0].public_key;
     const depositAmount = parseFloat(result.rows[0].deposit_amount);
     const currentBalance = parseFloat(result.rows[0].current_balance);
+    const lastWithdrawalDate = result.rows[0].last_withdrawal_date ? new Date(result.rows[0].last_withdrawal_date) : null;
+
+    // Calculate profit based on last withdrawal date or deposit date
     const userProfit = currentBalance - depositAmount;
 
     // Step 4: Ensure user has enough profit to withdraw
@@ -1200,7 +1199,7 @@ async function processWithdrawalBackground(chatId, amount) {
 
     // Step 5: Update the current_balance immediately to prevent double withdrawal
     const newBalance = depositAmount; // After profit withdrawal, the balance should reset to deposit value
-    await pool.query('UPDATE users SET current_balance = $1 WHERE chat_id = $2', [newBalance, chatId]);
+    await pool.query('UPDATE users SET current_balance = $1, last_withdrawal_date = NOW() WHERE chat_id = $2', [newBalance, chatId]);
 
     // Step 6: Process the withdrawal (send SOL from main wallet to user's public key)
     const transactionSignature = await processWithdrawal(chatId, amount, userPublicKey);
@@ -1220,6 +1219,7 @@ async function processWithdrawalBackground(chatId, amount) {
     locks.delete(chatId); // Ensure lock is released even on failure
   }
 }
+
 
 
 bot.action('auto_reinvest', async (ctx) => {
