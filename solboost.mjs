@@ -62,7 +62,7 @@ const releaseLock = (userId) => {
 };
 
 // Constants
-const { Pool } = pkg;
+//const { Pool } = pkg;
 const MAX_RETRIES = 5;
 const INITIAL_BACKOFF = 1000; // 1 second
 
