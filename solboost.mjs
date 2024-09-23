@@ -1092,39 +1092,78 @@ Minimum withdrawal: 0.1 SOL
 
 
 bot.action(/^withdraw_profit_/, async (ctx) => {
-  console.log('Callback data:', ctx.match);
   const chatId = ctx.from.id;
-  const profit = parseFloat(ctx.match.input.split('_')[2]);
-  console.log('Extracted profit:', profit);
+  const callbackData = ctx.callbackQuery.data;
   
-  if (isNaN(profit) || profit < 0.1) {
-    await ctx.answerCbQuery('Invalid or insufficient withdrawal amount. Minimum is 0.1 SOL');
-    return;
-  }
+  // Extract the profit from the callback data
+  const profit = parseFloat(callbackData.split('_')[2]);
+  console.log(`Extracted profit: ${profit}`);
 
   try {
-    // Check main wallet balance first
+    // Answer the callback query immediately
+    await ctx.answerCbQuery('Processing your withdrawal...');
+    
+    // Set a lock to prevent concurrent withdrawals
+    if (locks.has(chatId)) {
+      await ctx.reply('A withdrawal is already in progress. Please wait.');
+      return;
+    }
+    locks.set(chatId, true); // Lock
+
     const mainWalletBalance = await checkMainWalletBalance();
+    console.log(`Main wallet balance: ${mainWalletBalance} SOL`);
+
     if (mainWalletBalance < profit) {
-      await ctx.answerCbQuery('We are facing technical difficulties in Solana network, Please try again later.');
-      // Notify admin
+      console.log(`Insufficient main wallet balance for withdrawal of ${profit} SOL`);
+      await ctx.reply('We are facing technical difficulties. Please try again later.');
       await bot.telegram.sendMessage(BOT_OWNER_ID, `LOW BALANCE ALERT: Main wallet balance (${mainWalletBalance} SOL) is less than requested withdrawal (${profit} SOL).`);
+      locks.delete(chatId); // Release lock
       return;
     }
 
-    const result = await pool.query('SELECT public_key FROM users WHERE chat_id = $1', [chatId]);
+    const result = await pool.query('SELECT public_key, deposit_amount, current_balance FROM users WHERE chat_id = $1', [chatId]);
     if (result.rows.length === 0) {
-      await ctx.answerCbQuery('User not found. Please use /start to register.');
+      console.log(`User ${chatId} not found in database`);
+      await ctx.reply('User not found. Please use /start to register.');
+      locks.delete(chatId); // Release lock
       return;
     }
+
     const userPublicKey = result.rows[0].public_key;
-    await processWithdrawalBackground(chatId, profit);
-    await ctx.answerCbQuery('Withdrawal processed successfully');
-    await ctx.editMessageText(`Withdrawal of ${profit.toFixed(2)} SOL has been processed.`);
+    const depositAmount = parseFloat(result.rows[0].deposit_amount);
+    const currentBalance = parseFloat(result.rows[0].current_balance);
+    
+    const userProfit = currentBalance - depositAmount;
+    if (userProfit < profit) {
+      await ctx.reply(`Insufficient profit to withdraw ${profit.toFixed(2)} SOL. Your available profit is ${userProfit.toFixed(2)} SOL.`);
+      locks.delete(chatId); // Release lock
+      return;
+    }
+
+    const newBalance = await processWithdrawal(chatId, profit, userPublicKey);
+    console.log(`Withdrawal of ${profit} SOL processed successfully for user ${chatId}. New balance: ${newBalance} SOL`);
+
+    await pool.query('UPDATE users SET current_balance = $1 WHERE chat_id = $2', [depositAmount, chatId]);
+
+    await ctx.reply(`✅ Withdrawal of ${profit.toFixed(2)} SOL has been processed successfully. Your new balance is ${depositAmount.toFixed(2)} SOL.`);
+
+    const mainMenuKeyboard = Markup.keyboard([
+      ['Main Wallet', 'Start Earning'],
+      ['Deposit', 'Withdraw'],
+      ['Referrals', 'Balance'],
+      ['Docs', 'Refresh'],
+      ['💡 How it works']
+    ]).resize();
+
+    await ctx.reply('What would you like to do next?', mainMenuKeyboard);
+
   } catch (error) {
     console.error('Error processing manual withdrawal:', error);
-    await ctx.answerCbQuery('An error occurred during withdrawal. Please try again or contact support.');
-    await ctx.editMessageText('An error occurred during withdrawal. Please try again or contact support.');
+    await ctx.reply('An error occurred during withdrawal. Please try again or contact support.');
+    await bot.telegram.sendMessage(BOT_OWNER_ID, `Error processing withdrawal for user ${chatId}: ${error.message}`);
+  } finally {
+    // Release the lock even if an error occurs
+    locks.delete(chatId);
   }
 });
 
