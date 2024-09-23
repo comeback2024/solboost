@@ -766,15 +766,13 @@ bot.hears('Balance', async (ctx) => {
       return ctx.reply('You haven\'t made any deposits yet.');
     }
 
-    const depositAmountNumber = parseFloat(deposit_amount);
-    const calculatedBalance = calculateCurrentBalance(depositAmountNumber, new Date(deposit_date));
-    const profit = Math.max(0, calculatedBalance - depositAmountNumber); // Ensure profit is never negative
+    const profit = Math.max(0, current_balance - deposit_amount);
 
     const message = `
 💰 Your Current Balance 💰
-Initial Deposit: ${depositAmountNumber.toFixed(8)} SOL
+Initial Deposit: ${deposit_amount} SOL
 Deposit Date: ${new Date(deposit_date).toLocaleDateString()}
-Current Balance: ${calculatedBalance.toFixed(8)} SOL
+Current Balance: ${current_balance} SOL
 Available for Withdrawal: ${profit.toFixed(8)} SOL
 
 Balance last updated: ${new Date().toLocaleString()}
@@ -787,6 +785,7 @@ Balance last updated: ${new Date().toLocaleString()}
     await ctx.reply('An error occurred while fetching your balance. Please try again.');
   }
 });
+
 
 bot.hears('Start Earning', async (ctx) => {
   try {
@@ -1699,16 +1698,12 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     await client.query('BEGIN');
 
     // Get user's current balance and deposit info
-    const userQuery = 'SELECT deposit_amount, deposit_date, current_balance FROM users WHERE chat_id = $1 FOR UPDATE';
+    const userQuery = 'SELECT deposit_amount, current_balance FROM users WHERE chat_id = $1 FOR UPDATE';
     const userResult = await client.query(userQuery, [chatId]);
-    const { deposit_amount, deposit_date, current_balance } = userResult.rows[0];
+    const { deposit_amount, current_balance } = userResult.rows[0];
 
-    // Calculate the up-to-date balance
-    const calculatedBalance = calculateCurrentBalance(parseFloat(deposit_amount), new Date(deposit_date));
-    console.log(`User calculated balance: ${calculatedBalance} SOL`);
-
-    if (calculatedBalance < amount) {
-      throw new Error(`Insufficient user balance. Available: ${calculatedBalance}, Requested: ${amount}`);
+    if (current_balance < amount) {
+      throw new Error(`Insufficient user balance. Available: ${current_balance}, Requested: ${amount}`);
     }
 
     const connection = new Connection(RPC_URL);
@@ -1726,28 +1721,21 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     const signature = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
     console.log(`Transaction sent. Signature: ${signature}`);
 
-    // Calculate new balance
-    const newBalance = calculatedBalance - amount;
-    const now = new Date();
-
-    // Update user's balance, setting deposit_amount equal to new balance to reset profit to zero
+    // Update user's balance to match deposit amount after withdrawal
     const updateUserQuery = `
       UPDATE users
-      SET current_balance = $1,
-          deposit_amount = $1,
-          deposit_date = $2,
-          last_profit_check = $2
-      WHERE chat_id = $3
+      SET current_balance = deposit_amount
+      WHERE chat_id = $1
     `;
-    await client.query(updateUserQuery, [newBalance, now, chatId]);
+    await client.query(updateUserQuery, [chatId]);
 
     // Record the transaction
-    await recordTransaction(chatId, 'withdrawal', amount, signature, newBalance);
+    await recordTransaction(chatId, 'withdrawal', amount, signature, deposit_amount);
 
     await client.query('COMMIT');
 
-    console.log(`Withdrawal processed successfully for user ${chatId}. New balance: ${newBalance} SOL, Profit reset to 0`);
-    return { newBalance, newDepositAmount: newBalance };
+    console.log(`Withdrawal processed successfully for user ${chatId}. New balance set to deposit amount: ${deposit_amount} SOL`);
+    return deposit_amount;
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error processing withdrawal:', error);
@@ -1756,7 +1744,6 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     client.release();
   }
 };
-
 
 const checkMainWalletBalance = async () => {
   try {
