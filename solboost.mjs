@@ -1051,12 +1051,16 @@ With Auto Withdraw, your profits are automatically transferred to your generated
 bot.action('manual_withdrawal', async (ctx) => {
   const chatId = ctx.from.id;
   try {
-      await safeAnswerCallbackQuery(ctx, 'Processing your withdrawal request...');
+    await safeAnswerCallbackQuery(ctx, 'Processing your withdrawal request...');
 
+    // Assuming getUserBalance is a function that retrieves the deposit amount, deposit date, current balance, and profit
     const { depositAmount, depositDate, currentBalance, profit } = await getUserBalance(chatId);
 
+    // Ensure depositDate is properly formatted
+    const depositDateTime = new Date(depositDate);
 
-      const message = `With Manual Withdraw, you have complete control over withdrawing your profits. You can manually select the amount of SOL you wish to withdraw from your profits at any time.
+    const message = `
+With Manual Withdraw, you have complete control over withdrawing your profits. You can manually select the amount of SOL you wish to withdraw from your profits at any time.
       
 Deposit Amount: ${depositAmount.toFixed(2)} SOL
 Deposit Date: ${depositDateTime.toLocaleDateString()}
@@ -1064,16 +1068,16 @@ Current Balance: ${currentBalance.toFixed(2)} SOL
 Profit: ${profit.toFixed(2)} SOL
 
 Minimum withdrawal: 0.1 SOL
-      `;
+    `;
 
-      const keyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('Withdraw Profit', `confirm_withdraw_${profit.toFixed(8)}`)],
-                [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
-              ]);
-      await ctx.editMessageText(message, keyboard);
-    } else {
-      await ctx.answerCbQuery('User not found. Please use /start to register.');
-    }
+    // Construct the inline keyboard
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('Withdraw Profit', `confirm_withdraw_${profit.toFixed(8)}`)],
+      [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
+    ]);
+
+    // Send the updated message
+    await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard });
   } catch (error) {
     console.error('Error in manual withdrawal:', error);
     await ctx.answerCbQuery('An error occurred. Please try again.');
