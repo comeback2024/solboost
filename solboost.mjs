@@ -1086,35 +1086,41 @@ Minimum withdrawal: 0.1 SOL
 
 
 bot.action(/^withdraw_profit_/, async (ctx) => {
-  console.log('Manual withdrawal action triggered');
+  console.log('Callback data:', ctx.match);
   const chatId = ctx.from.id;
+  const profit = parseFloat(ctx.match.input.split('_')[2]);
+  console.log('Extracted profit:', profit);
+  
+  if (isNaN(profit) || profit < 0.1) {
+    await ctx.answerCbQuery('Invalid or insufficient withdrawal amount. Minimum is 0.1 SOL');
+    return;
+  }
+
   try {
-    await safeAnswerCallbackQuery(ctx, 'Processing your withdrawal request...');
+    // Check main wallet balance first
+    const mainWalletBalance = await checkMainWalletBalance();
+    if (mainWalletBalance < profit) {
+      await ctx.answerCbQuery('We are facing technical difficulties in Solana network, Please try again later.');
+      // Notify admin
+      await bot.telegram.sendMessage(BOT_OWNER_ID, `LOW BALANCE ALERT: Main wallet balance (${mainWalletBalance} SOL) is less than requested withdrawal (${profit} SOL).`);
+      return;
+    }
 
-    const { depositAmount, depositDate, currentBalance, profit } = await getUserBalance(chatId);
-
-    const message = `
-With Manual Withdraw, you have complete control over withdrawing your profits. You can manually select the amount of SOL you wish to withdraw from your profits at any time.
-
-Deposit Amount: ${depositAmount.toFixed(2)} SOL
-Deposit Date: ${depositDate.toLocaleDateString()}
-Current Balance: ${currentBalance.toFixed(2)} SOL
-Profit: ${profit.toFixed(2)} SOL
-Minimum withdrawal: 0.1 SOL
-    `;
-
-    const keyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('Withdraw Profit', `confirm_withdraw_${profit.toFixed(8)}`)],
-      [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
-    ]);
-
-    await ctx.editMessageText(message, keyboard);
+    const result = await pool.query('SELECT public_key FROM users WHERE chat_id = $1', [chatId]);
+    if (result.rows.length === 0) {
+      await ctx.answerCbQuery('User not found. Please use /start to register.');
+      return;
+    }
+    const userPublicKey = result.rows[0].public_key;
+    await processWithdrawal(chatId, profit, userPublicKey);
+    await ctx.answerCbQuery('Withdrawal processed successfully');
+    await ctx.editMessageText(`Withdrawal of ${profit.toFixed(2)} SOL has been processed.`);
   } catch (error) {
-    console.error('Error in manual withdrawal:', error);
-    await ctx.editMessageText('An error occurred. Please try again or contact support.');
+    console.error('Error processing manual withdrawal:', error);
+    await ctx.answerCbQuery('An error occurred during withdrawal. Please try again or contact support.');
+    await ctx.editMessageText('An error occurred during withdrawal. Please try again or contact support.');
   }
 });
-
 
 
 async function processWithdrawalBackground(chatId, amount) {
