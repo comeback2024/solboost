@@ -1053,7 +1053,7 @@ bot.action('manual_withdrawal', async (ctx) => {
   try {
       await safeAnswerCallbackQuery(ctx, 'Processing your withdrawal request...');
 
-    cconst { depositAmount, depositDate, currentBalance, profit } = await getUserBalance(chatId);
+    const { depositAmount, depositDate, currentBalance, profit } = await getUserBalance(chatId);
 
 
       const message = `With Manual Withdraw, you have complete control over withdrawing your profits. You can manually select the amount of SOL you wish to withdraw from your profits at any time.
@@ -1067,10 +1067,9 @@ Minimum withdrawal: 0.1 SOL
       `;
 
       const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('Withdraw Profit', `withdraw_profit_${profit.toFixed(8)}`)],
-        [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
-      ]);
-
+          [Markup.button.callback('Withdraw Profit', `confirm_withdraw_${profit.toFixed(8)}`)],
+                [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
+              ]);
       await ctx.editMessageText(message, keyboard);
     } else {
       await ctx.answerCbQuery('User not found. Please use /start to register.');
