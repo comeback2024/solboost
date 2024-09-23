@@ -1116,7 +1116,6 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
 });
 
 
-const locks = new Map(); // To lock withdrawals for users
 
 async function processWithdrawalBackground(chatId, amount) {
   try {
