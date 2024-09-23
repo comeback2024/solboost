@@ -1078,41 +1078,76 @@ Minimum withdrawal: 0.1 SOL
 
 
 bot.action(/^withdraw_profit_/, async (ctx) => {
-  console.log('Callback data:', ctx.match);
-  const chatId = ctx.from.id;
-  const profit = parseFloat(ctx.match.input.split('_')[2]);
-  console.log('Extracted profit:', profit);
-  
-  if (isNaN(profit) || profit < 0.1) {
-    await ctx.answerCbQuery('Invalid or insufficient withdrawal amount. Minimum is 0.1 SOL');
-    return;
-  }
-
+  console.log('Manual withdrawal action triggered');
   try {
+    await safeAnswerCallbackQuery(ctx, 'Processing your withdrawal request...');
+
+    const chatId = ctx.from.id;
+    const profit = parseFloat(ctx.match.input.split('_')[2]);
+    console.log(`User ${chatId} requested withdrawal of ${profit} SOL`);
+    
+    if (isNaN(profit) || profit < 0.1) {
+      console.log(`Invalid withdrawal amount: ${profit}`);
+      await ctx.editMessageText('Invalid or insufficient withdrawal amount. Minimum is 0.1 SOL');
+      return;
+    }
+
     // Check main wallet balance first
-    const mainWalletBalance = await checkMainWalletBalance();
+    let mainWalletBalance;
+    try {
+      mainWalletBalance = await checkMainWalletBalance();
+      console.log(`Main wallet balance: ${mainWalletBalance} SOL`);
+    } catch (error) {
+      console.error('Error checking main wallet balance:', error);
+      await ctx.editMessageText('Error checking wallet balance. Please try again later.');
+      return;
+    }
+
     if (mainWalletBalance < profit) {
-      await ctx.answerCbQuery('We are facing technical difficulties in Solana network. Please try again later.');
+      console.log(`Insufficient main wallet balance for withdrawal of ${profit} SOL`);
+      await ctx.editMessageText('We are facing technical difficulties. Please try again later.');
       // Notify admin
       await bot.telegram.sendMessage(BOT_OWNER_ID, `LOW BALANCE ALERT: Main wallet balance (${mainWalletBalance} SOL) is less than requested withdrawal (${profit} SOL).`);
       return;
     }
 
-    const result = await pool.query('SELECT public_key FROM users WHERE chat_id = $1', [chatId]);
-    if (result.rows.length === 0) {
-      await ctx.answerCbQuery('User not found. Please use /start to register.');
+    let userPublicKey;
+    try {
+      const result = await pool.query('SELECT public_key FROM users WHERE chat_id = $1', [chatId]);
+      if (result.rows.length === 0) {
+        console.log(`User ${chatId} not found in database`);
+        await ctx.editMessageText('User not found. Please use /start to register.');
+        return;
+      }
+      userPublicKey = result.rows[0].public_key;
+    } catch (error) {
+      console.error('Error querying user public key:', error);
+      await ctx.editMessageText('Error retrieving user information. Please try again later.');
       return;
     }
-    const userPublicKey = result.rows[0].public_key;
-    await processWithdrawal(chatId, profit, userPublicKey);
-    await ctx.answerCbQuery('Withdrawal processed successfully');
-    await ctx.editMessageText(`Withdrawal of ${profit.toFixed(2)} SOL has been processed.`);
+
+    console.log(`Processing withdrawal for user ${chatId} with public key ${userPublicKey}`);
+    try {
+      await processWithdrawal(chatId, profit, userPublicKey);
+      console.log(`Withdrawal of ${profit} SOL processed successfully for user ${chatId}`);
+      await ctx.editMessageText(`Withdrawal of ${profit.toFixed(2)} SOL has been processed successfully.`);
+    } catch (error) {
+      console.error('Error processing withdrawal:', error);
+      await ctx.editMessageText('An error occurred during withdrawal. Please try again or contact support.');
+      // Notify admin about the error
+      const adminMessage = `Error processing withdrawal for user ${chatId}: ${error.message}`;
+      await bot.telegram.sendMessage(BOT_OWNER_ID, adminMessage);
+    }
   } catch (error) {
-    console.error('Error processing manual withdrawal:', error);
-    await ctx.answerCbQuery('An error occurred during withdrawal. Please try again or contact support.');
-    await ctx.editMessageText('An error occurred during withdrawal. Please try again or contact support.');
+    console.error('Unexpected error in manual withdrawal handler:', error);
+    try {
+      await ctx.editMessageText('An unexpected error occurred. Please try again later.');
+    } catch (replyError) {
+      console.error('Error sending error message to user:', replyError);
+    }
   }
 });
+
 
 bot.action('auto_reinvest', async (ctx) => {
   const chatId = ctx.from.id;
