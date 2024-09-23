@@ -768,7 +768,7 @@ bot.hears('Balance', async (ctx) => {
 
     const depositAmountNumber = parseFloat(deposit_amount);
     const calculatedBalance = calculateCurrentBalance(depositAmountNumber, new Date(deposit_date));
-    const profit = calculatedBalance - depositAmountNumber;
+    const profit = Math.max(0, calculatedBalance - depositAmountNumber); // Ensure profit is never negative
 
     const message = `
 💰 Your Current Balance 💰
@@ -787,7 +787,6 @@ Balance last updated: ${new Date().toLocaleString()}
     await ctx.reply('An error occurred while fetching your balance. Please try again.');
   }
 });
-
 
 bot.hears('Start Earning', async (ctx) => {
   try {
@@ -1727,10 +1726,11 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     const signature = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
     console.log(`Transaction sent. Signature: ${signature}`);
 
-    // Calculate new balance and update user's balance
+    // Calculate new balance
     const newBalance = calculatedBalance - amount;
     const now = new Date();
 
+    // Update user's balance, setting deposit_amount equal to new balance to reset profit to zero
     const updateUserQuery = `
       UPDATE users
       SET current_balance = $1,
@@ -1746,7 +1746,7 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
 
     await client.query('COMMIT');
 
-    console.log(`Withdrawal processed successfully for user ${chatId}. New balance: ${newBalance} SOL`);
+    console.log(`Withdrawal processed successfully for user ${chatId}. New balance: ${newBalance} SOL, Profit reset to 0`);
     return { newBalance, newDepositAmount: newBalance };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1756,6 +1756,7 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     client.release();
   }
 };
+
 
 const checkMainWalletBalance = async () => {
   try {
