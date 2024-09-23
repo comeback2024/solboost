@@ -1118,7 +1118,7 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
       return;
     }
     const userPublicKey = result.rows[0].public_key;
-    await processWithdrawal(chatId, profit, userPublicKey);
+    await processWithdrawalBackground(chatId, profit);
     await ctx.answerCbQuery('Withdrawal processed successfully');
     await ctx.editMessageText(`Withdrawal of ${profit.toFixed(2)} SOL has been processed.`);
   } catch (error) {
