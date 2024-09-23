@@ -486,17 +486,28 @@ const handleDeposit = async (userId, amount) => {
 
     const now = new Date();
     
+      // Fetch current deposit amount and handle if null or undefined
+          const result = await client.query('SELECT deposit_amount FROM users WHERE chat_id = $1', [userId]);
+          let depositAmount = result.rows[0].deposit_amount;
+
+          // Ensure depositAmount is a number
+          depositAmount = depositAmount ? parseFloat(depositAmount) : 0;
+
+          // Update user's deposit amount and date
+          const newDepositAmount = depositAmount + amount;
+
+      
     // Update user's deposit amount and date
-    const updateQuery = `
-      UPDATE users
-      SET deposit_amount = COALESCE(deposit_amount, 0) + $1,
-          deposit_date = CASE
-                          WHEN deposit_amount IS NULL THEN $2
-                          ELSE deposit_date
-                         END,
-          current_balance = COALESCE(current_balance, 0) + $1
-      WHERE chat_id = $3
-      RETURNING deposit_amount, deposit_date, current_balance`;
+      const updateQuery = `
+            UPDATE users
+            SET deposit_amount = $1,
+                deposit_date = CASE
+                                WHEN deposit_amount = 0 THEN $2
+                                ELSE deposit_date
+                               END,
+                current_balance = current_balance + $3
+            WHERE chat_id = $4
+            RETURNING deposit_amount, current_balance`;
     const updateResult = await client.query(updateQuery, [amount, now, userId]);
     const { deposit_amount, deposit_date, current_balance } = updateResult.rows[0];
 
