@@ -767,7 +767,7 @@ bot.hears('Balance', async (ctx) => {
     }
 
     const depositAmountNumber = parseFloat(deposit_amount);
-    const calculatedBalance = calculateCurrentBalance(depositAmountNumber, deposit_date);
+    const calculatedBalance = calculateCurrentBalance(depositAmountNumber, new Date(deposit_date));
     const profit = calculatedBalance - depositAmountNumber;
 
     const message = `
@@ -775,10 +775,9 @@ bot.hears('Balance', async (ctx) => {
 Initial Deposit: ${depositAmountNumber.toFixed(8)} SOL
 Deposit Date: ${new Date(deposit_date).toLocaleDateString()}
 Current Balance: ${calculatedBalance.toFixed(8)} SOL
-Profit: ${profit.toFixed(8)} SOL
+Available for Withdrawal: ${profit.toFixed(8)} SOL
 
-Balance updates every hour.
-Last updated: ${new Date().toLocaleTimeString()}
+Balance last updated: ${new Date().toLocaleString()}
     `;
 
     await ctx.reply(message, { parse_mode: 'HTML' });
@@ -788,16 +787,7 @@ Last updated: ${new Date().toLocaleTimeString()}
     await ctx.reply('An error occurred while fetching your balance. Please try again.');
   }
 });
-      bot.action('stop_balance_updates', async (ctx) => {
-        try {
-          clearBalanceInterval(ctx);
-          await ctx.answerCbQuery('Balance updates stopped');
-          await ctx.editMessageText('Balance updates have been stopped. Use the Balance option again to restart updates.');
-        } catch (error) {
-          console.error('Error stopping balance updates:', error);
-          await ctx.answerCbQuery('Error stopping balance updates');
-        }
-      });
+
 
 bot.hears('Start Earning', async (ctx) => {
   try {
@@ -1739,16 +1729,17 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
 
     // Calculate new balance and update user's balance
     const newBalance = calculatedBalance - amount;
-    const newDepositAmount = parseFloat(deposit_amount) - amount;
+    const now = new Date();
 
     const updateUserQuery = `
       UPDATE users
       SET current_balance = $1,
-          deposit_amount = $2,
-          last_profit_check = CURRENT_TIMESTAMP
+          deposit_amount = $1,
+          deposit_date = $2,
+          last_profit_check = $2
       WHERE chat_id = $3
     `;
-    await client.query(updateUserQuery, [newBalance, newDepositAmount, chatId]);
+    await client.query(updateUserQuery, [newBalance, now, chatId]);
 
     // Record the transaction
     await recordTransaction(chatId, 'withdrawal', amount, signature, newBalance);
@@ -1756,7 +1747,7 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     await client.query('COMMIT');
 
     console.log(`Withdrawal processed successfully for user ${chatId}. New balance: ${newBalance} SOL`);
-    return newBalance;
+    return { newBalance, newDepositAmount: newBalance };
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error processing withdrawal:', error);
@@ -1765,7 +1756,6 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     client.release();
   }
 };
-
 
 const checkMainWalletBalance = async () => {
   try {
