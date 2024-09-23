@@ -1051,14 +1051,16 @@ With Auto Withdraw, your profits are automatically transferred to your generated
 bot.action('manual_withdrawal', async (ctx) => {
   const chatId = ctx.from.id;
   try {
+    // Acknowledge the callback query to Telegram
     await safeAnswerCallbackQuery(ctx, 'Processing your withdrawal request...');
 
-    // Assuming getUserBalance is a function that retrieves the deposit amount, deposit date, current balance, and profit
+    // Fetch user balance data (deposit amount, deposit date, current balance, profit)
     const { depositAmount, depositDate, currentBalance, profit } = await getUserBalance(chatId);
 
-    // Ensure depositDate is properly formatted
+    // Ensure depositDate is properly formatted as a Date object
     const depositDateTime = new Date(depositDate);
 
+    // Prepare the message with financial details
     const message = `
 With Manual Withdraw, you have complete control over withdrawing your profits. You can manually select the amount of SOL you wish to withdraw from your profits at any time.
       
@@ -1076,13 +1078,17 @@ Minimum withdrawal: 0.1 SOL
       [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
     ]);
 
-    // Send the updated message
-    await ctx.editMessageText(message, { parse_mode: 'HTML', reply_markup: keyboard });
+    // Send the message with the inline keyboard attached
+    await ctx.editMessageText(message, {
+      parse_mode: 'HTML', // Use HTML formatting in the message
+      reply_markup: keyboard.reply_markup // Attach the keyboard properly
+    });
   } catch (error) {
     console.error('Error in manual withdrawal:', error);
     await ctx.answerCbQuery('An error occurred. Please try again.');
   }
 });
+
 
 
 bot.action(/^withdraw_profit_/, async (ctx) => {
