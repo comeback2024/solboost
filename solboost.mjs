@@ -750,41 +750,55 @@ Balance: ${solBalance.toFixed(2)} SOL ($${(solBalance * 158).toFixed(2)} USD)`;
         await sendMainMenu(ctx);
       });
 
+
+const getUserBalance = async (chatId) => {
+  const query = `
+    SELECT deposit_amount, deposit_date, current_balance
+    FROM users
+    WHERE chat_id = $1
+  `;
+  const result = await pool.query(query, [chatId]);
+  
+  if (result.rows.length === 0) {
+    throw new Error('User not found');
+  }
+
+  const { deposit_amount, deposit_date, current_balance } = result.rows[0];
+  const profit = Math.max(0, parseFloat(current_balance) - parseFloat(deposit_amount));
+
+  return {
+    depositAmount: parseFloat(deposit_amount),
+    depositDate: new Date(deposit_date),
+    currentBalance: parseFloat(current_balance),
+    profit: profit
+  };
+};
+
+
+
+
 bot.hears('Balance', async (ctx) => {
   const chatId = ctx.from.id;
   try {
-    const query = 'SELECT deposit_amount, deposit_date, current_balance FROM users WHERE chat_id = $1';
-    const result = await pool.query(query, [chatId]);
-    
-    if (result.rows.length === 0) {
-      return ctx.reply('User not found. Please use /start to register.');
-    }
-
-    const { deposit_amount, deposit_date, current_balance } = result.rows[0];
-    
-    if (!deposit_amount || !deposit_date) {
-      return ctx.reply('You haven\'t made any deposits yet.');
-    }
-
-    const profit = Math.max(0, current_balance - deposit_amount);
+    const { depositAmount, depositDate, currentBalance, profit } = await getUserBalance(chatId);
 
     const message = `
 💰 Your Current Balance 💰
-Initial Deposit: ${deposit_amount} SOL
-Deposit Date: ${new Date(deposit_date).toLocaleDateString()}
-Current Balance: ${current_balance} SOL
+Initial Deposit: ${depositAmount.toFixed(8)} SOL
+Deposit Date: ${depositDate.toLocaleDateString()}
+Current Balance: ${currentBalance.toFixed(8)} SOL
 Available for Withdrawal: ${profit.toFixed(8)} SOL
 
 Balance last updated: ${new Date().toLocaleString()}
     `;
 
     await ctx.reply(message, { parse_mode: 'HTML' });
-
   } catch (error) {
     console.error('Error in balance action:', error);
     await ctx.reply('An error occurred while fetching your balance. Please try again.');
   }
 });
+
 
 
 bot.hears('Start Earning', async (ctx) => {
@@ -1088,32 +1102,31 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
   try {
     await safeAnswerCallbackQuery(ctx, 'Processing your withdrawal request...');
 
-    const profit = parseFloat(ctx.match.input.split('_')[2]);
-    console.log(`User ${chatId} requested withdrawal of ${profit} SOL`);
-    
-    if (isNaN(profit) || profit < 0.1) {
-      console.log(`Invalid withdrawal amount: ${profit}`);
-      await ctx.editMessageText('Invalid or insufficient withdrawal amount. Minimum is 0.1 SOL');
-      return;
-    }
+    const { depositAmount, depositDate, currentBalance, profit } = await getUserBalance(chatId);
 
-    // Immediately respond to the user
-    await ctx.editMessageText(`Your withdrawal request for ${profit.toFixed(2)} SOL is being processed. You will receive a confirmation message shortly.`);
+    const message = `
+With Manual Withdraw, you have complete control over withdrawing your profits. You can manually select the amount of SOL you wish to withdraw from your profits at any time.
 
-    // Process the withdrawal in the background
-    processWithdrawalBackground(chatId, profit)
-      .then(() => {
-        console.log(`Background withdrawal process completed for user ${chatId}`);
-      })
-      .catch((error) => {
-        console.error(`Background withdrawal process failed for user ${chatId}:`, error);
-      });
+Deposit Amount: ${depositAmount.toFixed(2)} SOL
+Deposit Date: ${depositDate.toLocaleDateString()}
+Current Balance: ${currentBalance.toFixed(2)} SOL
+Profit: ${profit.toFixed(2)} SOL
+Minimum withdrawal: 0.1 SOL
+    `;
 
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('Withdraw Profit', `confirm_withdraw_${profit.toFixed(8)}`)],
+      [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
+    ]);
+
+    await ctx.editMessageText(message, keyboard);
   } catch (error) {
-    console.error('Error initiating withdrawal process:', error);
-    await ctx.editMessageText('An error occurred while initiating the withdrawal. Please try again or contact support.');
+    console.error('Error in manual withdrawal:', error);
+    await ctx.editMessageText('An error occurred. Please try again or contact support.');
   }
 });
+
+
 
 async function processWithdrawalBackground(chatId, amount) {
   try {
