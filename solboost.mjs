@@ -8,6 +8,7 @@ import http from 'http';
 import winston from 'winston';
 import schedule from 'node-schedule';
 import { sendAndConfirmTransaction } from '@solana/web3.js';
+import { SendTransactionError } from '@solana/web3.js';
 
 
 // Load environment variables
@@ -1091,7 +1092,7 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
     // Check main wallet balance first
     const mainWalletBalance = await checkMainWalletBalance();
     if (mainWalletBalance < profit) {
-      await ctx.answerCbQuery('We are facing technical difficulties in Solana network, Please try again later.');
+      await ctx.answerCbQuery('We are facing technical difficulties in Solana network. Please try again later.');
       // Notify admin
       await bot.telegram.sendMessage(BOT_OWNER_ID, `LOW BALANCE ALERT: Main wallet balance (${mainWalletBalance} SOL) is less than requested withdrawal (${profit} SOL).`);
       return;
@@ -1112,7 +1113,6 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
     await ctx.editMessageText('An error occurred during withdrawal. Please try again or contact support.');
   }
 });
-
 
 bot.action('auto_reinvest', async (ctx) => {
   const chatId = ctx.from.id;
@@ -1649,6 +1649,8 @@ const calculateCurrentBalance = (initialAmount, depositDate) => {
 };
 
 // Function to process withdrawal
+import { SendTransactionError } from '@solana/web3.js';
+
 const processWithdrawal = async (chatId, amount, userPublicKey) => {
   const client = await pool.connect();
   try {
@@ -1674,9 +1676,15 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
       throw new Error('Insufficient user balance');
     }
 
+    // Get a recent blockhash
+    const { blockhash } = await connection.getLatestBlockhash();
+
     // Perform the actual transfer
     const lamports = Math.floor(amount * LAMPORTS_PER_SOL);
-    const transaction = new Transaction().add(
+    const transaction = new Transaction({
+      recentBlockhash: blockhash,
+      feePayer: mainWallet.publicKey
+    }).add(
       SystemProgram.transfer({
         fromPubkey: mainWallet.publicKey,
         toPubkey: new PublicKey(userPublicKey),
@@ -1685,8 +1693,8 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     );
 
     // Estimate transaction fee
-    const { feeCalculator } = await connection.getRecentBlockhash();
-    const estimatedFee = await connection.getFeeForMessage(transaction.compileMessage());
+    const feeCalculator = await connection.getFeeForMessage(transaction.compileMessage());
+    const estimatedFee = feeCalculator.value ?? 5000;  // Default to 5000 lamports if null
     console.log(`Estimated transaction fee: ${estimatedFee} lamports`);
 
     // Check if main wallet has enough balance including fee
@@ -1698,6 +1706,9 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
 
     // Record the transaction
     await recordTransaction(chatId, 'withdrawal', amount, signature, calculatedBalance - amount);
+
+    // Update user's balance
+    await client.query('UPDATE users SET current_balance = $1 WHERE chat_id = $2', [calculatedBalance - amount, chatId]);
 
     await client.query('COMMIT');
 
@@ -1717,7 +1728,6 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     client.release();
   }
 };
-
 
 const checkMainWalletBalance = async () => {
   try {
