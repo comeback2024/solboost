@@ -283,7 +283,7 @@ const registerUser = async (chatId, publicKey, privateKey, firstName) => {
       RETURNING *;
     `;
     const result = await client.query(query, [chatId, publicKey, privateKey, firstName, referralCode]);
-    console.log('User registered/updated:', result.rows[0]);
+   // console.log('User registered/updated:', result.rows[0]);
     return result.rows[0];
   } catch (error) {
     console.error('Error registering user:', error);
@@ -857,7 +857,7 @@ bot.hears('Start Earning', async (ctx) => {
     }
     
     const privateKeyBase58 = res.rows[0].private_key;
-    console.log(`Retrieved private key from DB: ${privateKeyBase58}`);
+    //console.log(`Retrieved private key from DB: ${privateKeyBase58}`);
     
     const privateKey = bs58.decode(privateKeyBase58);
     const userWallet = Keypair.fromSecretKey(privateKey);
