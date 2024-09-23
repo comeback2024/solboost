@@ -10,9 +10,26 @@ import schedule from 'node-schedule';
 import { sendAndConfirmTransaction } from '@solana/web3.js';
 import { SendTransactionError } from '@solana/web3.js';
 
-
 // Load environment variables
 dotenv.config();
+
+
+const locks = new Map();
+
+const acquireLock = async (userId) => {
+  if (locks.has(userId)) {
+    const lockTime = locks.get(userId);
+    if (Date.now() - lockTime < 5 * 60 * 1000) { // 5 minutes
+      return false;
+    }
+  }
+  locks.set(userId, Date.now());
+  return true;
+};
+
+const releaseLock = (userId) => {
+  locks.delete(userId);
+};
 
 // Constants
 const { Pool } = pkg;
@@ -1079,10 +1096,10 @@ Minimum withdrawal: 0.1 SOL
 
 bot.action(/^withdraw_profit_/, async (ctx) => {
   console.log('Manual withdrawal action triggered');
+  const chatId = ctx.from.id;
   try {
     await safeAnswerCallbackQuery(ctx, 'Processing your withdrawal request...');
 
-    const chatId = ctx.from.id;
     const profit = parseFloat(ctx.match.input.split('_')[2]);
     console.log(`User ${chatId} requested withdrawal of ${profit} SOL`);
     
@@ -1093,15 +1110,8 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
     }
 
     // Check main wallet balance first
-    let mainWalletBalance;
-    try {
-      mainWalletBalance = await checkMainWalletBalance();
-      console.log(`Main wallet balance: ${mainWalletBalance} SOL`);
-    } catch (error) {
-      console.error('Error checking main wallet balance:', error);
-      await ctx.editMessageText('Error checking wallet balance. Please try again later.');
-      return;
-    }
+    const mainWalletBalance = await checkMainWalletBalance();
+    console.log(`Main wallet balance: ${mainWalletBalance} SOL`);
 
     if (mainWalletBalance < profit) {
       console.log(`Insufficient main wallet balance for withdrawal of ${profit} SOL`);
@@ -1111,43 +1121,31 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
       return;
     }
 
-    let userPublicKey;
-    try {
-      const result = await pool.query('SELECT public_key FROM users WHERE chat_id = $1', [chatId]);
-      if (result.rows.length === 0) {
-        console.log(`User ${chatId} not found in database`);
-        await ctx.editMessageText('User not found. Please use /start to register.');
-        return;
-      }
-      userPublicKey = result.rows[0].public_key;
-    } catch (error) {
-      console.error('Error querying user public key:', error);
-      await ctx.editMessageText('Error retrieving user information. Please try again later.');
+    const result = await pool.query('SELECT public_key FROM users WHERE chat_id = $1', [chatId]);
+    if (result.rows.length === 0) {
+      console.log(`User ${chatId} not found in database`);
+      await ctx.editMessageText('User not found. Please use /start to register.');
       return;
     }
+    const userPublicKey = result.rows[0].public_key;
 
     console.log(`Processing withdrawal for user ${chatId} with public key ${userPublicKey}`);
-    try {
-      await processWithdrawal(chatId, profit, userPublicKey);
-      console.log(`Withdrawal of ${profit} SOL processed successfully for user ${chatId}`);
-      await ctx.editMessageText(`Withdrawal of ${profit.toFixed(2)} SOL has been processed successfully.`);
-    } catch (error) {
-      console.error('Error processing withdrawal:', error);
+    const newBalance = await processWithdrawal(chatId, profit, userPublicKey);
+    console.log(`Withdrawal of ${profit} SOL processed successfully for user ${chatId}. New balance: ${newBalance} SOL`);
+    
+    await ctx.editMessageText(`Withdrawal of ${profit.toFixed(2)} SOL has been processed successfully. Your new balance is ${newBalance.toFixed(2)} SOL.`);
+  } catch (error) {
+    console.error('Error processing manual withdrawal:', error);
+    if (error.message.includes('Another withdrawal is in progress')) {
+      await ctx.editMessageText('Another withdrawal is currently in progress. Please try again in a few minutes.');
+    } else {
       await ctx.editMessageText('An error occurred during withdrawal. Please try again or contact support.');
       // Notify admin about the error
       const adminMessage = `Error processing withdrawal for user ${chatId}: ${error.message}`;
       await bot.telegram.sendMessage(BOT_OWNER_ID, adminMessage);
     }
-  } catch (error) {
-    console.error('Unexpected error in manual withdrawal handler:', error);
-    try {
-      await ctx.editMessageText('An unexpected error occurred. Please try again later.');
-    } catch (replyError) {
-      console.error('Error sending error message to user:', replyError);
-    }
   }
 });
-
 
 bot.action('auto_reinvest', async (ctx) => {
   const chatId = ctx.from.id;
@@ -1686,12 +1684,20 @@ const calculateCurrentBalance = (initialAmount, depositDate) => {
 // Function to process withdrawal
 
 const processWithdrawal = async (chatId, amount, userPublicKey) => {
+  if (!acquireLock(chatId)) {
+    throw new Error('Another withdrawal is in progress. Please try again in a few minutes.');
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     const connection = new Connection(RPC_URL);
     
+    console.log(`Processing withdrawal for user ${chatId}`);
+    console.log(`Withdrawal amount: ${amount} SOL`);
+    console.log(`User public key: ${userPublicKey}`);
+
     // Log main wallet balance
     const mainWalletBalance = await connection.getBalance(mainWallet.publicKey);
     console.log(`Main wallet balance: ${mainWalletBalance / LAMPORTS_PER_SOL} SOL`);
@@ -1704,14 +1710,14 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     // Calculate the up-to-date balance
     const calculatedBalance = calculateCurrentBalance(parseFloat(deposit_amount), new Date(deposit_date));
     console.log(`User calculated balance: ${calculatedBalance} SOL`);
-    console.log(`Withdrawal amount: ${amount} SOL`);
 
     if (calculatedBalance < amount) {
-      throw new Error('Insufficient user balance');
+      throw new Error(`Insufficient user balance. Available: ${calculatedBalance}, Requested: ${amount}`);
     }
 
     // Get a recent blockhash
-    const { blockhash } = await connection.getLatestBlockhash();
+    const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
+    console.log(`Got recent blockhash: ${blockhash}`);
 
     // Perform the actual transfer
     const lamports = Math.floor(amount * LAMPORTS_PER_SOL);
@@ -1736,29 +1742,53 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
       throw new Error(`Insufficient funds in main wallet. Available: ${mainWalletBalance}, Required: ${lamports + estimatedFee}`);
     }
 
-    const signature = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
+    console.log('Sending transaction...');
+    const signature = await sendAndConfirmTransaction(
+      connection,
+      transaction,
+      [mainWallet],
+      { maxRetries: 5 }
+    );
+    console.log(`Transaction sent. Signature: ${signature}`);
+
+    console.log('Confirming transaction...');
+    const confirmation = await connection.confirmTransaction({
+      signature,
+      blockhash,
+      lastValidBlockHeight,
+    });
+
+    if (confirmation.value.err) {
+      throw new Error(`Transaction failed to confirm. Error: ${JSON.stringify(confirmation.value.err)}`);
+    }
+
+    console.log('Transaction confirmed successfully');
+
+    // Calculate new balance
+    const newBalance = calculatedBalance - amount;
+
+    // Update user's balance and last_profit_check
+    const updateUserQuery = `
+      UPDATE users
+      SET current_balance = $1,
+          last_profit_check = CURRENT_TIMESTAMP
+      WHERE chat_id = $2
+    `;
+    await client.query(updateUserQuery, [newBalance, chatId]);
 
     // Record the transaction
-    await recordTransaction(chatId, 'withdrawal', amount, signature, calculatedBalance - amount);
-
-    // Update user's balance
-    await client.query('UPDATE users SET current_balance = $1 WHERE chat_id = $2', [calculatedBalance - amount, chatId]);
+    await recordTransaction(chatId, 'withdrawal', amount, signature, newBalance);
 
     await client.query('COMMIT');
 
-    await bot.telegram.sendMessage(chatId, `Withdrawal of ${amount.toFixed(2)} SOL has been processed. Your new balance is ${(calculatedBalance - amount).toFixed(2)} SOL.`);
+    console.log(`Withdrawal processed successfully for user ${chatId}. New balance: ${newBalance} SOL`);
+    return newBalance;
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error processing withdrawal:', error);
-    if (error instanceof SendTransactionError) {
-      console.error('Transaction error details:', error.logs);
-    }
-    await bot.telegram.sendMessage(chatId, 'An error occurred during withdrawal. Please try again later or contact support.');
-    // Notify admin about the error
-    const adminMessage = `Error processing withdrawal for user ${chatId}: ${error.message}`;
-    await bot.telegram.sendMessage(BOT_OWNER_ID, adminMessage);
     throw error;
   } finally {
+    releaseLock(chatId);
     client.release();
   }
 };
