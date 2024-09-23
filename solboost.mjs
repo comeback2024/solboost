@@ -1094,106 +1094,42 @@ Minimum withdrawal: 0.1 SOL
 bot.action(/^withdraw_profit_/, async (ctx) => {
   const chatId = ctx.from.id;
   const callbackData = ctx.callbackQuery.data;
-  
+
   // Extract the profit from the callback data
   const profit = parseFloat(callbackData.split('_')[2]);
   console.log(`Extracted profit: ${profit}`);
 
   try {
-    // Answer the callback query immediately
-    await ctx.answerCbQuery;
-    
-    // Set a lock to prevent concurrent withdrawals
-    if (locks.has(chatId)) {
-      await ctx.reply('A withdrawal is already in progress. Please wait.');
-      return;
-    }
-    locks.set(chatId, true); // Lock
+    // Immediately answer the callback query so the user gets feedback quickly
+    await ctx.answerCbQuery('Processing your withdrawal request...');
 
-    const mainWalletBalance = await checkMainWalletBalance();
-    console.log(`Main wallet balance: ${mainWalletBalance} SOL`);
+    // Send an immediate response to the user
+    await ctx.reply(`Your withdrawal of ${profit.toFixed(2)} SOL is being processed. You will be notified once it's complete.`);
 
-    if (mainWalletBalance < profit) {
-      console.log(`Insufficient main wallet balance for withdrawal of ${profit} SOL`);
-      await ctx.reply('We are facing technical difficulties. Please try again later.');
-      await bot.telegram.sendMessage(BOT_OWNER_ID, `LOW BALANCE ALERT: Main wallet balance (${mainWalletBalance} SOL) is less than requested withdrawal (${profit} SOL).`);
-      locks.delete(chatId); // Release lock
-      return;
-    }
-
-    const result = await pool.query('SELECT public_key, deposit_amount, current_balance FROM users WHERE chat_id = $1', [chatId]);
-    if (result.rows.length === 0) {
-      console.log(`User ${chatId} not found in database`);
-      await ctx.reply('User not found. Please use /start to register.');
-      locks.delete(chatId); // Release lock
-      return;
-    }
-
-    const userPublicKey = result.rows[0].public_key;
-    const depositAmount = parseFloat(result.rows[0].deposit_amount);
-    const currentBalance = parseFloat(result.rows[0].current_balance);
-    
-    const userProfit = currentBalance - depositAmount;
-      const TOLERANCE = 1e-9;
-      if (userProfit + TOLERANCE < profit) {
-            await ctx.reply(`Insufficient profit to withdraw ${profit.toFixed(2)} SOL. Your available profit is ${userProfit.toFixed(2)} SOL.`);
-          locks.delete(chatId); // Release lock
-      return;
-    }
-
-    const newBalance = await processWithdrawal(chatId, profit, userPublicKey);
-    console.log(`Withdrawal of ${profit} SOL processed successfully for user ${chatId}. New balance: ${newBalance} SOL`);
-
-    await pool.query('UPDATE users SET current_balance = $1 WHERE chat_id = $2', [depositAmount, chatId]);
-
-    await ctx.reply(`✅ Withdrawal of ${profit.toFixed(2)} SOL has been processed successfully. Your new balance is ${depositAmount.toFixed(2)} SOL.`);
-
-    const mainMenuKeyboard = Markup.keyboard([
-      ['Main Wallet', 'Start Earning'],
-      ['Deposit', 'Withdraw'],
-      ['Referrals', 'Balance'],
-      ['Docs', 'Refresh'],
-      ['💡 How it works']
-    ]).resize();
-
-    await ctx.reply('What would you like to do next?', mainMenuKeyboard);
+    // Perform the withdrawal asynchronously (without await, so it's non-blocking)
+    processWithdrawalBackground(chatId, profit);
 
   } catch (error) {
-    console.error('Error processing manual withdrawal:', error);
-    await ctx.reply('An error occurred during withdrawal. Please try again or contact support.');
-    await bot.telegram.sendMessage(BOT_OWNER_ID, `Error processing withdrawal for user ${chatId}: ${error.message}`);
-  } finally {
-    // Release the lock even if an error occurs
-    locks.delete(chatId);
+    console.error('Error starting withdrawal process:', error);
+    await ctx.reply('An error occurred while processing your withdrawal. Please try again later.');
   }
 });
 
 
 async function processWithdrawalBackground(chatId, amount) {
-  if (locks.has(chatId)) {
-    // Prevent concurrent withdrawals for the same user
-    await bot.telegram.sendMessage(chatId, 'Another withdrawal is currently in progress. Please wait for it to finish.');
-    return;
-  }
-
-  // Set a lock for this user to prevent concurrent withdrawals
-  locks.set(chatId, true);
-
   try {
-    // Check main wallet balance first
+    // Step 1: Check main wallet balance first
     const mainWalletBalance = await checkMainWalletBalance();
     console.log(`Main wallet balance: ${mainWalletBalance} SOL`);
 
     if (mainWalletBalance < amount) {
       console.log(`Insufficient main wallet balance for withdrawal of ${amount} SOL`);
       await bot.telegram.sendMessage(chatId, 'We are facing technical difficulties. Please try again later.');
-      
-      // Notify admin of low balance
       await bot.telegram.sendMessage(BOT_OWNER_ID, `LOW BALANCE ALERT: Main wallet balance (${mainWalletBalance} SOL) is less than requested withdrawal (${amount} SOL).`);
       return;
     }
 
-    // Get the user's public key and balance info from the database
+    // Step 2: Fetch user's public key and balances
     const result = await pool.query('SELECT public_key, deposit_amount, current_balance FROM users WHERE chat_id = $1', [chatId]);
     if (result.rows.length === 0) {
       console.log(`User ${chatId} not found in database`);
@@ -1202,61 +1138,32 @@ async function processWithdrawalBackground(chatId, amount) {
     }
 
     const userPublicKey = result.rows[0].public_key;
-    const depositAmount = parseFloat(result.rows[0].deposit_amount); // User's deposit amount
-    const currentBalance = parseFloat(result.rows[0].current_balance); // User's current balance
+    const depositAmount = parseFloat(result.rows[0].deposit_amount);
+    const currentBalance = parseFloat(result.rows[0].current_balance);
 
-    console.log(`Processing withdrawal for user ${chatId} with public key ${userPublicKey}`);
-    
-    // Check if the user has enough profit to withdraw
-    const profit = currentBalance - depositAmount;
-    if (profit < amount) {
-      await bot.telegram.sendMessage(chatId, `Insufficient profit to withdraw ${amount.toFixed(2)} SOL. Your available profit is ${profit.toFixed(2)} SOL.`);
+    const userProfit = currentBalance - depositAmount;
+
+    // Step 3: Check if user has enough profit to withdraw
+    if (userProfit + 1e-9 < amount) {
+      await bot.telegram.sendMessage(chatId, `Insufficient profit to withdraw ${amount.toFixed(2)} SOL. Your available profit is ${userProfit.toFixed(2)} SOL.`);
       return;
     }
 
-    // Process the withdrawal
+    // Step 4: Process the withdrawal (send SOL from main wallet to user's public key)
     const newBalance = await processWithdrawal(chatId, amount, userPublicKey);
     console.log(`Withdrawal of ${amount} SOL processed successfully for user ${chatId}. New balance: ${newBalance} SOL`);
 
-    // After withdrawal, reset the current balance to the deposit amount (since the profit is withdrawn)
-    const updatedBalance = depositAmount;
+    // Step 5: Update the current_balance to reflect the withdrawal (set it to deposit amount after profit is withdrawn)
+    await pool.query('UPDATE users SET current_balance = $1 WHERE chat_id = $2', [depositAmount, chatId]);
 
-    // Update the user's balance in the database
-    await pool.query('UPDATE users SET current_balance = $1 WHERE chat_id = $2', [updatedBalance, chatId]);
-
-    // Notify user of successful withdrawal
-    await bot.telegram.sendMessage(chatId, `✅ Withdrawal of ${amount.toFixed(2)} SOL has been processed successfully.\nYour new balance is ${updatedBalance.toFixed(2)} SOL (equal to your deposit amount).`);
-
-    // Provide further options to the user after the withdrawal is processed
-    const mainMenuKeyboard = Markup.keyboard([
-      ['Main Wallet', 'Start Earning'],
-      ['Deposit', 'Withdraw'],
-      ['Referrals', 'Balance'],
-      ['Docs', 'Refresh'],
-      ['💡 How it works']
-    ]).resize();
-    
-    await bot.telegram.sendMessage(chatId, 'What would you like to do next?', mainMenuKeyboard);
+    // Step 6: Notify the user after successfully updating the balance
+    await bot.telegram.sendMessage(chatId, `✅ Your withdrawal of ${amount.toFixed(2)} SOL has been successfully processed. Your new balance is ${depositAmount.toFixed(2)} SOL.`);
 
   } catch (error) {
     console.error('Error processing manual withdrawal:', error);
-
-    // Notify user of error
-    if (error.message.includes('Another withdrawal is in progress')) {
-      await bot.telegram.sendMessage(chatId, 'Another withdrawal is currently in progress. Please try again in a few minutes.');
-    } else {
-      await bot.telegram.sendMessage(chatId, 'An error occurred during withdrawal. Please try again or contact support.');
-      
-      // Notify admin about the error
-      const adminMessage = `Error processing withdrawal for user ${chatId}: ${error.message}`;
-      await bot.telegram.sendMessage(BOT_OWNER_ID, adminMessage);
-    }
-  } finally {
-    // Remove the lock after withdrawal is completed
-    locks.delete(chatId);
+    await bot.telegram.sendMessage(chatId, 'An error occurred during the withdrawal. Please try again or contact support.');
   }
 }
-
 
 bot.action('auto_reinvest', async (ctx) => {
   const chatId = ctx.from.id;
