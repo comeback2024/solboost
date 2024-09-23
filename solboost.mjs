@@ -1101,7 +1101,7 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
 
   try {
     // Answer the callback query immediately
-    await ctx.answerCbQuery('Processing your withdrawal...');
+    await ctx.answerCbQuery;
     
     // Set a lock to prevent concurrent withdrawals
     if (locks.has(chatId)) {
@@ -1134,9 +1134,10 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
     const currentBalance = parseFloat(result.rows[0].current_balance);
     
     const userProfit = currentBalance - depositAmount;
-    if (userProfit < profit) {
-      await ctx.reply(`Insufficient profit to withdraw ${profit.toFixed(2)} SOL. Your available profit is ${userProfit.toFixed(2)} SOL.`);
-      locks.delete(chatId); // Release lock
+      const TOLERANCE = 1e-9;
+      if (userProfit + TOLERANCE < profit) {
+            await ctx.reply(`Insufficient profit to withdraw ${profit.toFixed(2)} SOL. Your available profit is ${userProfit.toFixed(2)} SOL.`);
+          locks.delete(chatId); // Release lock
       return;
     }
 
