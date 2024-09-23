@@ -83,11 +83,11 @@ bot.use(Telegraf.log());
 // Main wallet for receiving Solana
 const mainWallet = Keypair.fromSecretKey(bs58.decode(MAIN_WALLET_PRIVATE_KEY));
 
-// Database connection
+/*/ Database connection
 const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
-});
+});*/
 
 bot.catch((err, ctx) => {
   console.error(`Error while handling update ${ctx.update.update_id}:`, err);
