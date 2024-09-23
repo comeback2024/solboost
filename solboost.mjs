@@ -1649,7 +1649,6 @@ const calculateCurrentBalance = (initialAmount, depositDate) => {
 };
 
 // Function to process withdrawal
-import { SendTransactionError } from '@solana/web3.js';
 
 const processWithdrawal = async (chatId, amount, userPublicKey) => {
   const client = await pool.connect();
