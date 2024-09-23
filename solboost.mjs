@@ -1743,22 +1743,29 @@ const checkAndProcessAutoWithdrawals = async () => {
   }
 };
 
-const calculateCurrentBalance = (initialAmount, depositDate) => {
+const calculateCurrentBalance = (initialAmount, depositDate, lastWithdrawalDate) => {
   const now = new Date();
-  const depositTime = new Date(depositDate);
-  const elapsedDays = (now - depositTime) / (1000 * 60 * 60 * 24);
-  const doublingPeriods = Math.floor(elapsedDays / 10);
-  const remainingDays = elapsedDays % 10;
   
-  // Calculate the balance after the full doubling periods
-  let balance = initialAmount * Math.pow(2, doublingPeriods);
+  // Use deposit date if last withdrawal date is null, otherwise use last withdrawal date
+  const calculationStartDate = lastWithdrawalDate ? new Date(lastWithdrawalDate) : new Date(depositDate);
   
-  // Apply exponential growth for the remaining days
-  const partialGrowthFactor = Math.pow(2, remainingDays / 10);
-  balance *= partialGrowthFactor;
+  const elapsedDays = (now - calculationStartDate) / (1000 * 60 * 60 * 24); // Time in days since last withdrawal or deposit
+  const doublingPeriods = Math.floor(elapsedDays / 10); // Every 10 days, the amount doubles
+  const remainingDays = elapsedDays % 10; // Days since the last full doubling period
 
-  return balance;
+  // Assuming balance doubles every 10 days, compute the new balance
+  let newBalance = initialAmount * Math.pow(2, doublingPeriods);
+
+  // Handle partial period (remaining days) if necessary (adjustment can depend on your business logic)
+  // You could use some formula for partial growth, here assuming linear growth over 10 days as an example:
+  if (remainingDays > 0) {
+    const dailyGrowthRate = Math.pow(2, 1 / 10) - 1; // Approximate daily growth rate for doubling in 10 days
+    newBalance *= (1 + dailyGrowthRate * remainingDays);
+  }
+
+  return newBalance;
 };
+
 
 // Function to process withdrawal
 
