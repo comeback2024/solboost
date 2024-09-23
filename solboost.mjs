@@ -1,5 +1,5 @@
 // Import necessary modules
-import { Pool } from 'pg';
+
 import { Keypair, Connection, LAMPORTS_PER_SOL, Transaction, SystemProgram, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { Telegraf, Markup } from 'telegraf';
@@ -9,6 +9,8 @@ import winston from 'winston';
 import schedule from 'node-schedule';
 import { sendAndConfirmTransaction } from '@solana/web3.js';
 import { SendTransactionError } from '@solana/web3.js';
+import pkg from 'pg';
+const { Pool } = pkg;
 
 // Load environment variables
 dotenv.config();
