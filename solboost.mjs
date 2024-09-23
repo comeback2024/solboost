@@ -1,5 +1,5 @@
 // Import necessary modules
-import pkg from 'pg';
+import { Pool } from 'pg';
 import { Keypair, Connection, LAMPORTS_PER_SOL, Transaction, SystemProgram, PublicKey } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { Telegraf, Markup } from 'telegraf';
@@ -12,6 +12,36 @@ import { SendTransactionError } from '@solana/web3.js';
 
 // Load environment variables
 dotenv.config();
+
+// Setup a connection pool with appropriate settings
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL, // Make sure this is properly configured in your environment
+  max: 10, // Maximum number of connections
+  idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
+  connectionTimeoutMillis: 2000, // Return an error after 2 seconds if connection cannot be established
+});
+
+
+export async function queryDatabase(queryText, params) {
+  const client = await pool.connect(); // Get a client from the pool
+  try {
+    const res = await client.query(queryText, params); // Run your query
+    return res.rows;
+  } catch (err) {
+    console.error('Database query error:', err.stack);
+    throw err; // Rethrow the error to be handled in the calling function
+  } finally {
+    client.release(); // Release the connection back to the pool
+  }
+}
+
+// A sample function that uses the queryDatabase function
+export async function getUserById(userId) {
+  const queryText = 'SELECT * FROM users WHERE id = $1';
+  const result = await queryDatabase(queryText, [userId]);
+  return result;
+}
+
 
 
 const locks = new Map();
