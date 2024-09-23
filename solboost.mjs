@@ -1051,24 +1051,10 @@ With Auto Withdraw, your profits are automatically transferred to your generated
 bot.action('manual_withdrawal', async (ctx) => {
   const chatId = ctx.from.id;
   try {
-    const query = `
-      SELECT deposit_amount, deposit_date, public_key
-      FROM users
-      WHERE chat_id = $1
-    `;
-    const result = await pool.query(query, [chatId]);
+      await safeAnswerCallbackQuery(ctx, 'Processing your withdrawal request...');
 
-    if (result.rows.length > 0) {
-      const { deposit_amount, deposit_date, public_key } = result.rows[0];
-      
-      // Convert deposit_amount to a number
-      const depositAmount = parseFloat(deposit_amount);
-      
-      // Ensure deposit_date is a valid Date object
-      const depositDateTime = new Date(deposit_date);
-      
-      const currentBalance = calculateBalance(depositAmount, depositDateTime);
-      const profit = currentBalance - depositAmount;
+    cconst { depositAmount, depositDate, currentBalance, profit } = await getUserBalance(chatId);
+
 
       const message = `With Manual Withdraw, you have complete control over withdrawing your profits. You can manually select the amount of SOL you wish to withdraw from your profits at any time.
       
@@ -1791,8 +1777,8 @@ const updateAllUserBalances = async () => {
   }
 };
 
-// Run this job every hour
-setInterval(updateAllUserBalances, 60 * 60 * 1000);
+// Run this job every 5 mins
+setInterval(updateAllUserBalances, 5 * 60 * 1000);
 
 
 
