@@ -86,15 +86,42 @@ bot.use(Telegraf.log());
 const mainWallet = Keypair.fromSecretKey(bs58.decode(MAIN_WALLET_PRIVATE_KEY));
 
 // Database connection
-const pool = new Pool({
+/*const pool = new Pool({
   connectionString: DATABASE_URL,
   ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
+});*/
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: {
+    rejectUnauthorized: false
+  },
+  max: 20, // adjust this value based on your Heroku PostgreSQL plan
+  idleTimeoutMillis: 30000,
+  connectionTimeoutMillis: 2000,
+});
+
+pool.on('error', (err, client) => {
+  console.error('Unexpected error on idle client', err);
+  process.exit(-1);
 });
 
 bot.catch((err, ctx) => {
   console.error(`Error while handling update ${ctx.update.update_id}:`, err);
   // You can add more error handling logic here, such as notifying admins or logging to a service
 });
+
+const executeQuery = async (query, params = []) => {
+  const client = await pool.connect();
+  try {
+    const result = await client.query(query, params);
+    return result;
+  } finally {
+    client.release();
+  }
+};
+
+
 
 // Logger setup
 const logger = winston.createLogger({
