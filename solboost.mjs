@@ -837,24 +837,25 @@ const getUserBalance = async (chatId) => {
 
 
 
+// Update the 'Balance' handler
 bot.hears('Balance', async (ctx) => {
   const chatId = ctx.from.id;
   try {
-    const query = 'SELECT deposit_amount, deposit_date, current_balance FROM users WHERE chat_id = $1';
+    const query = 'SELECT deposit_amount, deposit_date, current_balance, last_withdrawal_date FROM users WHERE chat_id = $1';
     const result = await executeQuery(query, [chatId]);
     
     if (result.rows.length === 0) {
       return ctx.reply('User not found. Please use /start to register.');
     }
 
-    const { deposit_amount, deposit_date, current_balance } = result.rows[0];
+    const { deposit_amount, deposit_date, current_balance, last_withdrawal_date } = result.rows[0];
     
     if (!deposit_amount || !deposit_date) {
       return ctx.reply('You haven\'t made any deposits yet.');
     }
 
     const depositAmountNumber = parseFloat(deposit_amount);
-    const calculatedBalance = calculateBalance(depositAmountNumber, new Date(deposit_date));
+    const calculatedBalance = calculateCurrentBalance(depositAmountNumber, new Date(deposit_date), last_withdrawal_date);
     const profit = calculatedBalance - depositAmountNumber;
 
     const message = `
@@ -1560,11 +1561,11 @@ const processReferralBonus = async (depositAmount, userId) => {
           }
         };
 
+// Update the 'Refresh' handler
 bot.hears('Refresh', async (ctx) => {
   const chatId = ctx.from.id;
   try {
-    // Fetch user data from the database
-    const userQuery = 'SELECT public_key, deposit_amount FROM users WHERE chat_id = $1';
+    const userQuery = 'SELECT public_key, deposit_amount, deposit_date, last_withdrawal_date FROM users WHERE chat_id = $1';
     const userResult = await pool.query(userQuery, [chatId]);
 
     if (userResult.rows.length === 0) {
@@ -1572,31 +1573,27 @@ bot.hears('Refresh', async (ctx) => {
       return;
     }
 
-    const { public_key, deposit_amount } = userResult.rows[0];
+    const { public_key, deposit_amount, deposit_date, last_withdrawal_date } = userResult.rows[0];
 
-    // Connect to Solana and get the current balance
     const connection = new Connection(RPC_URL);
     const publicKey = new PublicKey(public_key);
     const balance = await connection.getBalance(publicKey);
     const solBalance = balance / LAMPORTS_PER_SOL;
 
-    // Calculate profit
-   // const profit = solBalance - parseFloat(deposit_amount);
+    const calculatedBalance = calculateCurrentBalance(parseFloat(deposit_amount), deposit_date, last_withdrawal_date);
 
-    // Prepare the message
     const message = `
 🔄 Refresh Complete
 
 💼 Wallet Address:
 <code>${public_key}</code>
 
-💰 Current Balance: ${solBalance.toFixed(4)} SOL
+💰 Current Balance: ${calculatedBalance.toFixed(4)} SOL
 📊 Initial Deposit: ${parseFloat(deposit_amount).toFixed(4)} SOL
 
 Last updated: ${new Date().toLocaleString()}
     `;
 
-    // Send the message
     await ctx.reply(message, {
       parse_mode: 'HTML',
       ...Markup.keyboard([
@@ -1608,18 +1605,11 @@ Last updated: ${new Date().toLocaleString()}
       ]).resize()
     });
 
-    // Update the deposit_amount in the database if it has changed
-    //if (solBalance !== parseFloat(deposit_amount)) {
-     // const updateQuery = 'UPDATE users SET deposit_amount = $1 WHERE chat_id = $2';
-    //  await pool.query(updateQuery, [solBalance, chatId]);
-   // }
-
   } catch (error) {
     console.error('Error in Refresh action:', error);
     await ctx.reply('An error occurred while refreshing your wallet information. Please try again later.');
   }
 });
-
 
 
 // Helper function to get user's public key
