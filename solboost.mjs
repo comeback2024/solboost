@@ -1758,6 +1758,7 @@ const checkAndProcessAutoWithdrawals = async () => {
   }
 };
 
+// Updated calculateCurrentBalance function
 const calculateCurrentBalance = (initialAmount, depositDate, lastWithdrawalDate) => {
   const now = new Date();
   const startDate = lastWithdrawalDate ? new Date(lastWithdrawalDate) : new Date(depositDate);
@@ -1772,19 +1773,20 @@ const calculateCurrentBalance = (initialAmount, depositDate, lastWithdrawalDate)
   return balance;
 };
 
-// Function to process withdrawal
-
+// Updated processWithdrawal function
 const processWithdrawal = async (chatId, amount, userPublicKey) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    const userQuery = 'SELECT deposit_amount, current_balance FROM users WHERE chat_id = $1 FOR UPDATE';
+    const userQuery = 'SELECT deposit_amount, current_balance, deposit_date, last_withdrawal_date FROM users WHERE chat_id = $1 FOR UPDATE';
     const userResult = await client.query(userQuery, [chatId]);
-    const { deposit_amount, current_balance } = userResult.rows[0];
+    const { deposit_amount, current_balance, deposit_date, last_withdrawal_date } = userResult.rows[0];
 
-    if (current_balance < amount) {
-      throw new Error(`Insufficient user balance. Available: ${current_balance}, Requested: ${amount}`);
+    const calculatedBalance = calculateCurrentBalance(deposit_amount, deposit_date, last_withdrawal_date);
+
+    if (calculatedBalance < amount) {
+      throw new Error(`Insufficient balance. Available: ${calculatedBalance}, Requested: ${amount}`);
     }
 
     const connection = new Connection(RPC_URL);
@@ -1802,8 +1804,8 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     const signature = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
     console.log(`Transaction sent. Signature: ${signature}`);
 
-    // Update user's balance
-    const newBalance = deposit_amount;
+    // Update user's balance and last withdrawal date
+    const newBalance = calculatedBalance - amount;
     const updateUserQuery = `
       UPDATE users
       SET current_balance = $1,
@@ -1817,7 +1819,7 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
 
     await client.query('COMMIT');
 
-    console.log(`Withdrawal processed successfully for user ${chatId}. New balance set to deposit amount: ${newBalance} SOL`);
+    console.log(`Withdrawal processed successfully for user ${chatId}. New balance: ${newBalance} SOL`);
     return newBalance;
   } catch (error) {
     await client.query('ROLLBACK');
@@ -1828,6 +1830,25 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
   }
 };
 
+// Update the updateAllUserBalances function to use the new calculation
+const updateAllUserBalances = async () => {
+  const client = await pool.connect();
+  try {
+    const query = 'SELECT chat_id, deposit_amount, deposit_date, last_withdrawal_date FROM users WHERE deposit_amount > 0';
+    const result = await client.query(query);
+
+    for (const user of result.rows) {
+      const currentBalance = calculateCurrentBalance(user.deposit_amount, user.deposit_date, user.last_withdrawal_date);
+      await client.query('UPDATE users SET current_balance = $1 WHERE chat_id = $2', [currentBalance, user.chat_id]);
+    }
+
+    console.log('All user balances updated successfully');
+  } catch (error) {
+    console.error('Error updating user balances:', error);
+  } finally {
+    client.release();
+  }
+};
 
 const checkMainWalletBalance = async () => {
   try {
@@ -1843,24 +1864,6 @@ const checkMainWalletBalance = async () => {
 };
 
 
-const updateAllUserBalances = async () => {
-  const client = await pool.connect();
-  try {
-    const query = 'SELECT chat_id, deposit_amount, deposit_date FROM users WHERE deposit_amount > 0';
-    const result = await client.query(query);
-
-    for (const user of result.rows) {
-      const currentBalance = calculateCurrentBalance(user.deposit_amount, user.deposit_date);
-      await client.query('UPDATE users SET current_balance = $1 WHERE chat_id = $2', [currentBalance, user.chat_id]);
-    }
-
-    console.log('All user balances updated successfully');
-  } catch (error) {
-    console.error('Error updating user balances:', error);
-  } finally {
-    client.release();
-  }
-};
 
 // Run this job every 5 mins
 setInterval(updateAllUserBalances, 5 * 60 * 1000);
