@@ -25,7 +25,11 @@ const pool = new Pool({
 
 
 setInterval(async () => {
-  const { totalCount, idleCount, waitingCount } = await pool.totalCount, pool.idleCount, pool.waitingCount;
+    const { totalCount, idleCount, waitingCount } = await Promise.all([
+      pool.totalCount(),
+      pool.idleCount(),
+      pool.waitingCount()
+    ]);
   console.log(`DB Connections - Total: ${totalCount}, Idle: ${idleCount}, Waiting: ${waitingCount}`);
 }, 60000); // Log every minute
 
