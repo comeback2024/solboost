@@ -7,7 +7,7 @@ import dotenv from 'dotenv';
 import http from 'http';
 import winston from 'winston';
 import schedule from 'node-schedule';
-import { sendAndConfirmTransaction } from '@solana/web3.js';
+//import { sendAndConfirmTransaction } from '@solana/web3.js';
 import { SendTransactionError } from '@solana/web3.js';
 import pkg from 'pg';
 const { Pool } = pkg;
