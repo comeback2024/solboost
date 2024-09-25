@@ -981,8 +981,9 @@ bot.hears('Start Earning', async (ctx) => {
 //handle desposits
 bot.hears('Deposit', showDepositMenu);
 
+// Update the deposit history handler
 bot.action('deposit_history', async (ctx) => {
-    await safeAnswerCallbackQuery(ctx);
+  await safeAnswerCallbackQuery(ctx);
   const chatId = ctx.from.id;
 
   try {
@@ -1003,7 +1004,7 @@ bot.action('deposit_history', async (ctx) => {
         message += `   Date: ${new Date(row.transaction_date).toLocaleString()}\n`;
         message += `   Status: ${row.status}\n`;
         if (row.tx_signature) {
-          message += `   <a href="https://explorer.solana.com/tx/${row.tx_signature}">View on Solana Explorer</a>\n`;
+          message += `   <a href="https://solscan.io/tx/${row.tx_signature}">View on Solscan</a>\n`;
         }
         message += '\n';
       });
@@ -1316,11 +1317,12 @@ const processAutoReinvest = async () => {
 setInterval(processAutoReinvest, 60 * 60 * 1000);
 
 
+// Update the withdrawal history handler
 bot.action('withdrawal_history', async (ctx) => {
   const chatId = ctx.from.id;
   try {
     const query = `
-      SELECT amount::numeric, transaction_date, status
+      SELECT amount::numeric, transaction_date, status, tx_signature
       FROM transactions
       WHERE user_id = $1 AND transaction_type = 'withdrawal'
       ORDER BY transaction_date DESC
@@ -1329,39 +1331,49 @@ bot.action('withdrawal_history', async (ctx) => {
     const result = await pool.query(query, [chatId]);
 
     if (result.rows.length > 0) {
-      let message = 'Your recent withdrawal history:\n\n';
+      let message = '<b>Your recent withdrawal history:</b>\n\n';
       result.rows.forEach((row, index) => {
         const amount = parseFloat(row.amount);
         message += `${index + 1}. Amount: ${amount.toFixed(2)} SOL\n`;
         message += `   Date: ${new Date(row.transaction_date).toLocaleString()}\n`;
-        message += `   Status: ${row.status}\n\n`;
+        message += `   Status: ${row.status}\n`;
+        if (row.tx_signature) {
+          message += `   <a href="https://solscan.io/tx/${row.tx_signature}">View on Solscan</a>\n`;
+        }
+        message += '\n';
       });
 
       await ctx.editMessageText(message, {
         parse_mode: 'HTML',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
-        ])
+        disable_web_page_preview: true,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: 'Back to Withdraw Options', callback_data: 'back_to_withdraw' }]
+          ]
+        }
       });
     } else {
       await ctx.editMessageText('You have no withdrawal history yet.', {
-        parse_mode: 'HTML',
-        ...Markup.inlineKeyboard([
-          [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
-        ])
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: 'Back to Withdraw Options', callback_data: 'back_to_withdraw' }]
+          ]
+        }
       });
     }
   } catch (error) {
     console.error('Error fetching withdrawal history:', error);
-    await ctx.answerCbQuery('An error occurred while fetching your withdrawal history.');
-    await ctx.editMessageText('An error occurred. Please try again later.', {
-      parse_mode: 'HTML',
-      ...Markup.inlineKeyboard([
-        [Markup.button.callback('Back to Withdraw Options', 'back_to_withdraw')]
-      ])
+    await ctx.editMessageText('An error occurred while fetching your withdrawal history. Please try again later.', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: 'Back to Withdraw Options', callback_data: 'back_to_withdraw' }]
+        ]
+      }
     });
   }
 });
+
+
 
 
 
