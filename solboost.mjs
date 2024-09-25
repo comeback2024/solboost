@@ -24,6 +24,12 @@ const pool = new Pool({
 });*/
 
 
+setInterval(async () => {
+  const { totalCount, idleCount, waitingCount } = await pool.totalCount, pool.idleCount, pool.waitingCount;
+  console.log(`DB Connections - Total: ${totalCount}, Idle: ${idleCount}, Waiting: ${waitingCount}`);
+}, 60000); // Log every minute
+
+
 export async function queryDatabase(queryText, params) {
   const client = await pool.connect(); // Get a client from the pool
   try {
@@ -111,10 +117,10 @@ bot.catch((err, ctx) => {
   // You can add more error handling logic here, such as notifying admins or logging to a service
 });
 
-const executeQuery = async (query, params = []) => {
+const executeQuery = async (queryText, params = []) => {
   const client = await pool.connect();
   try {
-    const result = await client.query(query, params);
+    const result = await client.query(queryText, params);
     return result;
   } finally {
     client.release();
@@ -368,35 +374,15 @@ const updateUserDeposit = async (chatId, amount) => {
   }
 };
 
-const recordTransaction = async (userId, type, amount, txSignature = null, newBalance = null) => {
-  const client = await pool.connect();
-  try {
-    const query = `
-      WITH inserted_transaction AS (
-        INSERT INTO transactions (user_id, transaction_type, amount, tx_signature, balance_after)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING *
-      )
-      SELECT
-        t.*,
-        u.public_key,
-        u.first_name,
-        u.deposit_amount,
-        u.withdrawal_amount,
-        u.status AS user_status,
-        u.referral_code
-      FROM inserted_transaction t
-      JOIN users u ON t.user_id = u.chat_id;
-    `;
-    const result = await client.query(query, [userId, type, amount, txSignature, newBalance]);
-    console.log(`Transaction recorded:`, result.rows[0]);
-    return result.rows[0];
-  } catch (error) {
-    console.error('Error recording transaction:', error);
-    throw error;
-  } finally {
-    client.release();
-  }
+const recordTransaction = async (client, userId, type, amount, txSignature = null, newBalance = null) => {
+  const query = `
+    INSERT INTO transactions (user_id, transaction_type, amount, tx_signature, balance_after)
+    VALUES ($1, $2, $3, $4, $5)
+    RETURNING *;
+  `;
+  const result = await client.query(query, [userId, type, amount, txSignature, newBalance]);
+  console.log(`Transaction recorded:`, result.rows[0]);
+  return result.rows[0];
 };
 
 // Keyboard and menu functions
@@ -850,19 +836,35 @@ const getUserBalance = async (chatId) => {
 bot.hears('Balance', async (ctx) => {
   const chatId = ctx.from.id;
   try {
-    const { depositAmount, depositDate, currentBalance, profit } = await getUserBalance(chatId);
+    const query = 'SELECT deposit_amount, deposit_date, current_balance FROM users WHERE chat_id = $1';
+    const result = await executeQuery(query, [chatId]);
+    
+    if (result.rows.length === 0) {
+      return ctx.reply('User not found. Please use /start to register.');
+    }
+
+    const { deposit_amount, deposit_date, current_balance } = result.rows[0];
+    
+    if (!deposit_amount || !deposit_date) {
+      return ctx.reply('You haven\'t made any deposits yet.');
+    }
+
+    const depositAmountNumber = parseFloat(deposit_amount);
+    const calculatedBalance = calculateBalance(depositAmountNumber, new Date(deposit_date));
+    const profit = calculatedBalance - depositAmountNumber;
 
     const message = `
 💰 Your Current Balance 💰
-Initial Deposit: ${depositAmount.toFixed(8)} SOL
-Deposit Date: ${depositDate.toLocaleDateString()}
-Current Balance: ${currentBalance.toFixed(8)} SOL
+Initial Deposit: ${depositAmountNumber.toFixed(8)} SOL
+Deposit Date: ${new Date(deposit_date).toLocaleDateString()}
+Current Balance: ${calculatedBalance.toFixed(8)} SOL
 Available for Withdrawal: ${profit.toFixed(8)} SOL
 
 Balance last updated: ${new Date().toLocaleString()}
     `;
 
     await ctx.reply(message, { parse_mode: 'HTML' });
+
   } catch (error) {
     console.error('Error in balance action:', error);
     await ctx.reply('An error occurred while fetching your balance. Please try again.');
@@ -1189,67 +1191,49 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
 
 async function processWithdrawalBackground(chatId, amount) {
   try {
-    // Step 1: Acquire lock for the user
     if (locks.has(chatId)) {
       await bot.telegram.sendMessage(chatId, '⚠️ Another withdrawal is already in progress. Please wait for it to complete.');
       return;
     }
-    locks.set(chatId, true); // Lock the user from initiating another withdrawal
+    locks.set(chatId, true);
 
-    // Step 2: Check main wallet balance first
     const mainWalletBalance = await checkMainWalletBalance();
     if (mainWalletBalance < amount) {
       await bot.telegram.sendMessage(chatId, '⚠️ We are facing technical difficulties. Please try again later.');
       await bot.telegram.sendMessage(BOT_OWNER_ID, `⚠️ LOW BALANCE ALERT: Main wallet balance (${mainWalletBalance} SOL) is less than the requested withdrawal (${amount} SOL) by user ${chatId}.`);
-      locks.delete(chatId); // Release the lock in case of failure
+      locks.delete(chatId);
       return;
     }
 
-    // Step 3: Fetch user's public key, balances, and last withdrawal date
     const result = await pool.query('SELECT public_key, deposit_amount, current_balance, last_withdrawal_date FROM users WHERE chat_id = $1', [chatId]);
     if (result.rows.length === 0) {
       await bot.telegram.sendMessage(chatId, 'User not found. Please use /start to register.');
-      locks.delete(chatId); // Release the lock in case of failure
+      locks.delete(chatId);
       return;
     }
 
-    const userPublicKey = result.rows[0].public_key;
-    const depositAmount = parseFloat(result.rows[0].deposit_amount);
-    const currentBalance = parseFloat(result.rows[0].current_balance);
-    const lastWithdrawalDate = result.rows[0].last_withdrawal_date ? new Date(result.rows[0].last_withdrawal_date) : null;
+    const { public_key: userPublicKey, deposit_amount, current_balance, last_withdrawal_date } = result.rows[0];
+    const calculatedBalance = calculateCurrentBalance(parseFloat(deposit_amount), new Date(result.rows[0].deposit_date), last_withdrawal_date);
 
-    // Calculate profit based on last withdrawal date or deposit date
-    const userProfit = currentBalance - depositAmount;
-
-    // Step 4: Ensure user has enough profit to withdraw
-    if (userProfit + 1e-9 < amount) {
-      await bot.telegram.sendMessage(chatId, `⚠️ Insufficient profit to withdraw ${amount.toFixed(2)} SOL. Your available profit is ${userProfit.toFixed(2)} SOL.`);
-      locks.delete(chatId); // Release the lock in case of failure
+    if (calculatedBalance < amount) {
+      await bot.telegram.sendMessage(chatId, `⚠️ Insufficient balance to withdraw ${amount.toFixed(8)} SOL. Your available balance is ${calculatedBalance.toFixed(8)} SOL.`);
+      locks.delete(chatId);
       return;
     }
 
-    // Step 5: Update the current_balance immediately to prevent double withdrawal
-    const newBalance = depositAmount; // After profit withdrawal, the balance should reset to deposit value
-    await pool.query('UPDATE users SET current_balance = $1, last_withdrawal_date = NOW() WHERE chat_id = $2', [newBalance, chatId]);
+    const newBalance = await processWithdrawal(chatId, amount, userPublicKey);
+    await bot.telegram.sendMessage(chatId, `✅ Your withdrawal of ${amount.toFixed(8)} SOL has been successfully processed. Your new balance is ${newBalance.toFixed(8)} SOL.`);
+    await bot.telegram.sendMessage(BOT_OWNER_ID, `ℹ️ User ${chatId} has withdrawn ${amount.toFixed(8)} SOL. New balance: ${newBalance.toFixed(8)} SOL.`);
 
-    // Step 6: Process the withdrawal (send SOL from main wallet to user's public key)
-    const transactionSignature = await processWithdrawal(chatId, amount, userPublicKey);
-
-    // Notify the user of successful withdrawal
-    await bot.telegram.sendMessage(chatId, `✅ Your withdrawal of ${amount.toFixed(2)} SOL has been successfully processed. Your new balance is ${newBalance.toFixed(2)} SOL.`);
-
-    // Notify the bot owner/admin
-    await bot.telegram.sendMessage(BOT_OWNER_ID, `ℹ️ User ${chatId} has withdrawn ${amount.toFixed(2)} SOL. Transaction: ${transactionSignature}. New balance: ${newBalance.toFixed(2)} SOL.`);
-
-    // Step 7: Release the lock after the process completes
-    locks.delete(chatId);
   } catch (error) {
     console.error('Error processing withdrawal:', error);
     await bot.telegram.sendMessage(chatId, '❌ An error occurred during the withdrawal. Please try again or contact support.');
     await bot.telegram.sendMessage(BOT_OWNER_ID, `❌ Error processing withdrawal for user ${chatId}: ${error.message}`);
-    locks.delete(chatId); // Ensure lock is released even on failure
+  } finally {
+    locks.delete(chatId);
   }
 }
+
 
 
 
@@ -1772,27 +1756,17 @@ const checkAndProcessAutoWithdrawals = async () => {
 
 const calculateCurrentBalance = (initialAmount, depositDate, lastWithdrawalDate) => {
   const now = new Date();
+  const startDate = lastWithdrawalDate ? new Date(lastWithdrawalDate) : new Date(depositDate);
+  const elapsedDays = (now - startDate) / (1000 * 60 * 60 * 24);
+  const doublingPeriods = Math.floor(elapsedDays / 10);
+  const remainingDays = elapsedDays % 10;
   
-  // Use deposit date if last withdrawal date is null, otherwise use last withdrawal date
-  const calculationStartDate = lastWithdrawalDate ? new Date(lastWithdrawalDate) : new Date(depositDate);
-  
-  const elapsedDays = (now - calculationStartDate) / (1000 * 60 * 60 * 24); // Time in days since last withdrawal or deposit
-  const doublingPeriods = Math.floor(elapsedDays / 10); // Every 10 days, the amount doubles
-  const remainingDays = elapsedDays % 10; // Days since the last full doubling period
+  let balance = initialAmount * Math.pow(2, doublingPeriods);
+  const partialGrowthFactor = Math.pow(2, remainingDays / 10);
+  balance *= partialGrowthFactor;
 
-  // Assuming balance doubles every 10 days, compute the new balance
-  let newBalance = initialAmount * Math.pow(2, doublingPeriods);
-
-  // Handle partial period (remaining days) if necessary (adjustment can depend on your business logic)
-  // You could use some formula for partial growth, here assuming linear growth over 10 days as an example:
-  if (remainingDays > 0) {
-    const dailyGrowthRate = Math.pow(2, 1 / 10) - 1; // Approximate daily growth rate for doubling in 10 days
-    newBalance *= (1 + dailyGrowthRate * remainingDays);
-  }
-
-  return newBalance;
+  return balance;
 };
-
 
 // Function to process withdrawal
 
@@ -1801,7 +1775,6 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
   try {
     await client.query('BEGIN');
 
-    // Get user's current balance and deposit info
     const userQuery = 'SELECT deposit_amount, current_balance FROM users WHERE chat_id = $1 FOR UPDATE';
     const userResult = await client.query(userQuery, [chatId]);
     const { deposit_amount, current_balance } = userResult.rows[0];
@@ -1825,21 +1798,23 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     const signature = await sendAndConfirmTransaction(connection, transaction, [mainWallet]);
     console.log(`Transaction sent. Signature: ${signature}`);
 
-    // Update user's balance to match deposit amount after withdrawal
+    // Update user's balance
+    const newBalance = deposit_amount;
     const updateUserQuery = `
       UPDATE users
-      SET current_balance = deposit_amount
-      WHERE chat_id = $1
+      SET current_balance = $1,
+          last_withdrawal_date = CURRENT_TIMESTAMP
+      WHERE chat_id = $2
     `;
-    await client.query(updateUserQuery, [chatId]);
+    await client.query(updateUserQuery, [newBalance, chatId]);
 
     // Record the transaction
-    await recordTransaction(chatId, 'withdrawal', amount, signature, deposit_amount);
+    await recordTransaction(client, chatId, 'withdrawal', amount, signature, newBalance);
 
     await client.query('COMMIT');
 
-    console.log(`Withdrawal processed successfully for user ${chatId}. New balance set to deposit amount: ${deposit_amount} SOL`);
-    return deposit_amount;
+    console.log(`Withdrawal processed successfully for user ${chatId}. New balance set to deposit amount: ${newBalance} SOL`);
+    return newBalance;
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error processing withdrawal:', error);
@@ -1848,6 +1823,7 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     client.release();
   }
 };
+
 
 const checkMainWalletBalance = async () => {
   try {
