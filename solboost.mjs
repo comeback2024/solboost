@@ -378,16 +378,18 @@ const updateUserDeposit = async (chatId, amount) => {
   }
 };
 
+// Update the recordTransaction function
 const recordTransaction = async (client, userId, type, amount, txSignature = null, newBalance = null) => {
   const query = `
-    INSERT INTO transactions (user_id, transaction_type, amount, tx_signature, balance_after)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO transactions (user_id, transaction_type, amount, tx_signature, balance_after, status)
+    VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING *;
   `;
-  const result = await client.query(query, [userId, type, amount, txSignature, newBalance]);
+  const result = await client.query(query, [userId, type, amount, txSignature, newBalance, 'completed']);
   console.log(`Transaction recorded:`, result.rows[0]);
   return result.rows[0];
 };
+
 
 // Keyboard and menu functions
 const getMainMenuKeyboard = () => {
@@ -563,7 +565,7 @@ const handleDeposit = async (userId, amount) => {
     current_balance = parseFloat(current_balance);
 
     // Record the transaction
-    await recordTransaction(client, userId, 'deposit', amount, null, current_balance);
+      await recordTransaction(client, userId, 'deposit', amount, txSignature, current_balance);
 
     // Process referral bonus
     await processReferralBonus(amount, userId);
@@ -1820,6 +1822,7 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     `;
     await client.query(updateUserQuery, [newBalance, chatId]);
 
+      
     // Record the transaction
     await recordTransaction(client, chatId, 'withdrawal', amount, signature, newBalance);
 
