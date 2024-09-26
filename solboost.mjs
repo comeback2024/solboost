@@ -554,9 +554,13 @@ const handleDeposit = async (userId, amount) => {
                          END,
           current_balance = current_balance + $1
       WHERE chat_id = $3
-      RETURNING deposit_amount, current_balance`;
+      RETURNING deposit_amount::float, current_balance::float`;
     const updateResult = await client.query(updateQuery, [amount, now, userId]);
-    const { deposit_amount, current_balance } = updateResult.rows[0];
+    let { deposit_amount, current_balance } = updateResult.rows[0];
+
+    // Ensure returned values are numbers
+    deposit_amount = parseFloat(deposit_amount);
+    current_balance = parseFloat(current_balance);
 
     // Record the transaction
     await recordTransaction(client, userId, 'deposit', amount, null, current_balance);
@@ -571,6 +575,8 @@ const handleDeposit = async (userId, amount) => {
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error handling deposit:', error);
+    console.error('Deposit amount:', amount);
+    console.error('User ID:', userId);
     throw error;
   } finally {
     client.release();
