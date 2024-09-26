@@ -535,33 +535,31 @@ const handleDeposit = async (userId, amount) => {
 
     const now = new Date();
     
-      // Fetch current deposit amount and handle if null or undefined
-          const result = await client.query('SELECT deposit_amount FROM users WHERE chat_id = $1', [userId]);
-          let depositAmount = result.rows[0].deposit_amount;
+    // Fetch current deposit amount and handle if null or undefined
+    const result = await client.query('SELECT deposit_amount, current_balance FROM users WHERE chat_id = $1', [userId]);
+    let depositAmount = result.rows[0].deposit_amount;
+    let currentBalance = result.rows[0].current_balance;
 
-          // Ensure depositAmount is a number
-          depositAmount = depositAmount ? parseFloat(depositAmount) : 0;
+    // Ensure depositAmount and currentBalance are numbers
+    depositAmount = depositAmount ? parseFloat(depositAmount) : 0;
+    currentBalance = currentBalance ? parseFloat(currentBalance) : 0;
 
-          // Update user's deposit amount and date
-          const newDepositAmount = depositAmount + amount;
-
-      
-    // Update user's deposit amount and date
-      const updateQuery = `
-            UPDATE users
-            SET deposit_amount = $1,
-                deposit_date = CASE
-                                WHEN deposit_amount = 0 THEN $2
-                                ELSE deposit_date
-                               END,
-                current_balance = current_balance + $3
-            WHERE chat_id = $4
-            RETURNING deposit_amount, current_balance`;
+    // Update user's deposit amount, date, and current balance
+    const updateQuery = `
+      UPDATE users
+      SET deposit_amount = deposit_amount + $1,
+          deposit_date = CASE
+                          WHEN deposit_amount = 0 THEN $2
+                          ELSE deposit_date
+                         END,
+          current_balance = current_balance + $1
+      WHERE chat_id = $3
+      RETURNING deposit_amount, current_balance`;
     const updateResult = await client.query(updateQuery, [amount, now, userId]);
-    const { deposit_amount, deposit_date, current_balance } = updateResult.rows[0];
+    const { deposit_amount, current_balance } = updateResult.rows[0];
 
     // Record the transaction
-    await recordTransaction(userId, 'deposit', amount, null, current_balance);
+    await recordTransaction(client, userId, 'deposit', amount, null, current_balance);
 
     // Process referral bonus
     await processReferralBonus(amount, userId);
