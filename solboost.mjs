@@ -966,7 +966,7 @@ bot.hears('Start Earning', async (ctx) => {
       await retryOperation(() => connection.confirmTransaction(signature, 'confirmed'));
       
       // Use the handleDeposit function to process the deposit
-      await handleDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL);
+      await handleDeposit(chatId, amountToTransfer / LAMPORTS_PER_SOL, signature);
 
       await ctx.reply(`Your deposit of ${(amountToTransfer / LAMPORTS_PER_SOL).toFixed(2)} SOL has been added to your trading balance.\n\n🎉 Welcome on Board, ${ctx.from.first_name}!\n\nYour deposit has been successfully received, and our automated trading bot is now working to maximize your earnings.\n\nStay tuned for updates, and feel free to reach out if you have any questions!\n\nHappy trading! 🚀`);
 
