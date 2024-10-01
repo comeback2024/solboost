@@ -2007,6 +2007,236 @@ bot.action('back_to_main_menu', async (ctx) => {
 // Set up auto reinvest to run every 4 hours
 setInterval(autoReinvest, 4 * 60 * 60 * 1000);
 
+
+bot.command('newwallet', async (ctx) => {
+  const chatId = ctx.from.id;
+
+  try {
+    // Check if user exists and has any transactions
+    const userQuery = `
+      SELECT u.*,
+             (SELECT COUNT(*) FROM transactions t WHERE t.user_id = u.chat_id) as transaction_count
+      FROM users u
+      WHERE u.chat_id = $1
+    `;
+    const userResult = await pool.query(userQuery, [chatId]);
+
+    if (userResult.rows.length === 0) {
+      return ctx.reply("You don't have a wallet yet. Please use /start to create your first wallet.");
+    }
+
+    const user = userResult.rows[0];
+    const transactionCount = parseInt(user.transaction_count);
+
+    if (transactionCount > 0) {
+      return ctx.reply("You already have transactions on your current wallet. For security reasons, a new wallet cannot be created. If you're experiencing issues, please contact support.");
+    }
+
+    // If no transactions, proceed with confirmation
+    const confirmationMessage = `
+⚠️ Warning: You are about to generate a new wallet.
+This will replace your current wallet address.
+
+Current wallet address:
+<code>${user.public_key}</code>
+
+Are you sure you want to generate a new wallet?
+    `;
+
+    const confirmationKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('Yes, generate new wallet', 'confirm_new_wallet')],
+      [Markup.button.callback('No, keep my current wallet', 'cancel_new_wallet')]
+    ]);
+
+    await ctx.reply(confirmationMessage, {
+      parse_mode: 'HTML',
+      ...confirmationKeyboard
+    });
+
+  } catch (error) {
+    console.error('Error checking user transactions:', error);
+    await ctx.reply('An error occurred while processing your request. Please try again later or contact support.');
+  }
+});
+
+bot.action('confirm_new_wallet', async (ctx) => {
+  await ctx.answerCbQuery();
+  const chatId = ctx.from.id;
+  const firstName = ctx.from.first_name || 'User';
+
+  try {
+    // Generate a new Solana wallet
+    const newWallet = Keypair.generate();
+    const publicKey = newWallet.publicKey.toString();
+    const privateKey = bs58.encode(newWallet.secretKey);
+
+    // Update user's wallet information in the database
+    const updateQuery = `
+      UPDATE users
+      SET public_key = $1,
+          private_key = $2,
+          last_activity = CURRENT_TIMESTAMP
+      WHERE chat_id = $3
+      RETURNING *;
+    `;
+    const result = await pool.query(updateQuery, [publicKey, privateKey, chatId]);
+
+    if (result.rows.length === 0) {
+      return ctx.editMessageText("An error occurred. Please use /start to set up your account.");
+    }
+
+    // Prepare the response message
+    const message = `
+🔐 New Wallet Generated Successfully!
+
+🔑 Your new wallet address:
+<code>${publicKey}</code>
+
+⚠️ Important: Keep your private key safe and never share it with anyone.
+
+Your previous wallet has been replaced. Use the 'Deposit' option to add funds to your new wallet and start trading.
+    `;
+
+    // Send the new wallet information to the user
+    await ctx.editMessageText(message, {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: 'Deposit Now', callback_data: 'deposit_now' }],
+          [{ text: 'Back to Main Menu', callback_data: 'back_to_main_menu' }]
+        ]
+      }
+    });
+
+    console.log(`New wallet generated for user ${chatId}`);
+  } catch (error) {
+    console.error('Error generating new wallet:', error);
+    await ctx.editMessageText('An error occurred while generating your new wallet. Please try again later or contact support.');
+  }
+});
+
+bot.action('cancel_new_wallet', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.editMessageText('Wallet generation cancelled. Your current wallet remains unchanged.');
+});
+
+
+
+// Command to start the import process
+bot.command('importwallet', async (ctx) => {
+  const chatId = ctx.from.id;
+
+  const message = `
+To import your existing Solana wallet, please provide your private key.
+
+⚠️ IMPORTANT SECURITY WARNING:
+1. Never share your private key with anyone.
+2. Ensure you're in a private and secure location before proceeding.
+3. Delete your message containing the private key immediately after sending.
+4. We recommend using this feature only if absolutely necessary.
+
+To proceed, please reply to this message with your private key.
+To cancel, use the /cancel command.
+  `;
+
+  await ctx.reply(message);
+  
+  // Set user state to expect private key input
+  // You'll need to implement a state management system. This is a simplified example:
+  userStates.set(chatId, 'WAITING_FOR_PRIVATE_KEY');
+});
+
+// Handler for private key input
+bot.on('text', async (ctx) => {
+  const chatId = ctx.from.id;
+  const userState = userStates.get(chatId);
+
+  if (userState === 'WAITING_FOR_PRIVATE_KEY') {
+    const privateKeyInput = ctx.message.text.trim();
+
+    try {
+      // Attempt to create a Keypair from the provided private key
+      let privateKey;
+      try {
+        privateKey = bs58.decode(privateKeyInput);
+      } catch (error) {
+        throw new Error('Invalid private key format. Please ensure you've entered the key correctly.');
+      }
+
+      if (privateKey.length !== 64) {
+        throw new Error('Invalid private key length. Solana private keys should be 64 bytes long.');
+      }
+
+      const keypair = Keypair.fromSecretKey(privateKey);
+      const publicKey = keypair.publicKey.toString();
+
+      // Check if wallet already exists in the database
+      const checkQuery = 'SELECT * FROM users WHERE public_key = $1';
+      const checkResult = await pool.query(checkQuery, [publicKey]);
+
+      if (checkResult.rows.length > 0) {
+        throw new Error('This wallet is already registered in our system.');
+      }
+
+      // Update user's wallet information in the database
+      const updateQuery = `
+        UPDATE users
+        SET public_key = $1,
+            private_key = $2,
+            last_activity = CURRENT_TIMESTAMP
+        WHERE chat_id = $3
+        RETURNING *;
+      `;
+      const result = await pool.query(updateQuery, [publicKey, privateKeyInput, chatId]);
+
+      if (result.rows.length === 0) {
+        throw new Error('Failed to update user information. Please try again or contact support.');
+      }
+
+      // Prepare success message
+      const successMessage = `
+✅ Wallet imported successfully!
+
+Your imported wallet address:
+<code>${publicKey}</code>
+
+Your wallet has been updated in our system. You can now use this wallet for all transactions.
+
+⚠️ Remember to delete your previous message containing the private key for security reasons.
+      `;
+
+      await ctx.reply(successMessage, {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: 'Check Balance', callback_data: 'check_balance' }],
+            [{ text: 'Back to Main Menu', callback_data: 'back_to_main_menu' }]
+          ]
+        }
+      });
+
+      // Clear user state
+      userStates.delete(chatId);
+
+    } catch (error) {
+      console.error('Error importing wallet:', error);
+      await ctx.reply(`Error: ${error.message}\nPlease try again or contact support.`);
+    }
+
+    // Regardless of success or failure, prompt user to delete their message
+    await ctx.reply('For security, please delete your message containing the private key.');
+  }
+});
+
+// Cancel command
+bot.command('cancel', (ctx) => {
+  const chatId = ctx.from.id;
+  userStates.delete(chatId);
+  ctx.reply('Wallet import cancelled. Your current wallet remains unchanged.');
+});
+
+
+
 // Create a server for local testing
 const PORT = process.env.PORT || 3000;
 http.createServer((req, res) => {
