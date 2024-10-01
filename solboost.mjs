@@ -530,7 +530,7 @@ Invite more friends to earn more!
 });
 
 
-const handleDeposit = async (userId, amount) => {
+const handleDeposit = async (userId, amount,txSignature) => {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -579,6 +579,7 @@ const handleDeposit = async (userId, amount) => {
     console.error('Error handling deposit:', error);
     console.error('Deposit amount:', amount);
     console.error('User ID:', userId);
+    console.error('Transaction Signature:', txSignature);
     throw error;
   } finally {
     client.release();
