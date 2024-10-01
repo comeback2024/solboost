@@ -2160,11 +2160,11 @@ bot.on('text', async (ctx) => {
       try {
         privateKey = bs58.decode(privateKeyInput);
       } catch (error) {
-        throw new Error('Invalid private key format. Please ensure you've entered the key correctly.');
+        throw new Error("Invalid private key format. Please ensure you've entered the key correctly.");
       }
 
       if (privateKey.length !== 64) {
-        throw new Error('Invalid private key length. Solana private keys should be 64 bytes long.');
+        throw new Error("Invalid private key length. Solana private keys should be 64 bytes long.");
       }
 
       const keypair = Keypair.fromSecretKey(privateKey);
@@ -2175,7 +2175,7 @@ bot.on('text', async (ctx) => {
       const checkResult = await pool.query(checkQuery, [publicKey]);
 
       if (checkResult.rows.length > 0) {
-        throw new Error('This wallet is already registered in our system.');
+        throw new Error("This wallet is already registered in our system.");
       }
 
       // Update user's wallet information in the database
@@ -2190,7 +2190,7 @@ bot.on('text', async (ctx) => {
       const result = await pool.query(updateQuery, [publicKey, privateKeyInput, chatId]);
 
       if (result.rows.length === 0) {
-        throw new Error('Failed to update user information. Please try again or contact support.');
+        throw new Error("Failed to update user information. Please try again or contact support.");
       }
 
       // Prepare success message
