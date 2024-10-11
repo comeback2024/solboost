@@ -1185,6 +1185,12 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
   console.log(`Extracted profit: ${profit}`);
 
   try {
+      // Check if the withdrawal amount is at least 0.5 SOL
+          if (profit < 0.5) {
+            await ctx.answerCbQuery('Minimum withdrawal amount is 0.5 SOL.');
+            return;
+          }
+
     // Immediately answer the callback query so the user gets feedback quickly
     await ctx.answerCbQuery('Processing your withdrawal request...');
 
