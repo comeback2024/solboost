@@ -1154,7 +1154,7 @@ Deposit Date: ${depositDateTime.toLocaleDateString()}
 Current Balance: ${currentBalance.toFixed(2)} SOL
 Profit: ${profit.toFixed(2)} SOL
 
-Minimum withdrawal: 0.1 SOL
+Minimum withdrawal: 0.5 SOL
     `;
 
     // Construct the inline keyboard
@@ -1503,7 +1503,7 @@ const getAdminStats = async () => {
 // Auto reinvest function
 const autoReinvest = async () => {
   try {
-    const query = 'SELECT chat_id, withdrawal_amount FROM users WHERE auto_reinvest = true AND withdrawal_amount >= 0.1';
+    const query = 'SELECT chat_id, withdrawal_amount FROM users WHERE auto_reinvest = true AND withdrawal_amount >= 0.5';
     const result = await pool.query(query);
 
     for (const row of result.rows) {
@@ -1752,7 +1752,7 @@ const checkAndProcessAutoWithdrawals = async () => {
       const currentBalance = calculateBalance(user.deposit_amount, user.last_profit_check);
       const profit = currentBalance - user.deposit_amount;
 
-      if (profit >= 0.1) {
+      if (profit >= 0.5) {
         await processWithdrawal(user.chat_id, profit, user.public_key);
         await client.query(
           'UPDATE users SET last_profit_check = CURRENT_TIMESTAMP WHERE chat_id = $1',
