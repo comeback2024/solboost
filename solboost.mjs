@@ -539,8 +539,9 @@ const handleDeposit = async (userId, amount,txSignature) => {
     
     // Fetch current deposit amount and handle if null or undefined
     const result = await client.query('SELECT deposit_amount, current_balance FROM users WHERE chat_id = $1', [userId]);
-    let depositAmount = result.rows[0].deposit_amount;
-    let currentBalance = result.rows[0].current_balance;
+    //let depositAmount = result.rows[0].deposit_amount;
+    //let currentBalance = result.rows[0].current_balance;
+      let { deposit_amount, current_balance, deposit_date } = result.rows[0];
 
     // Ensure depositAmount and currentBalance are numbers
     depositAmount = depositAmount ? parseFloat(depositAmount) : 0;
@@ -556,9 +557,9 @@ const handleDeposit = async (userId, amount,txSignature) => {
                          END,
           current_balance = current_balance + $1
       WHERE chat_id = $3
-      RETURNING deposit_amount::float, current_balance::float`;
+      RETURNING deposit_amount::float, current_balance::float.deposit_date`;
     const updateResult = await client.query(updateQuery, [amount, now, userId]);
-    let { deposit_amount, current_balance } = updateResult.rows[0];
+      let { deposit_amount: new_deposit_amount, current_balance: new_current_balance, deposit_date: new_deposit_date } = updateResult.rows[0];
 
     // Ensure returned values are numbers
     deposit_amount = parseFloat(deposit_amount);
@@ -1144,6 +1145,8 @@ bot.action('manual_withdrawal', async (ctx) => {
 
     // Ensure depositDate is properly formatted as a Date object
     const depositDateTime = new Date(depositDate);
+      
+    const daysSinceDeposit = (new Date() - depositDateTime) / (1000 * 60 * 60 * 24);
 
     // Prepare the message with financial details
     const message = `
@@ -1206,6 +1209,11 @@ bot.action(/^withdraw_profit_/, async (ctx) => {
   }
 });
 
+// Add a new action for contacting support
+bot.action('contact_support', async (ctx) => {
+  await safeAnswerCallbackQuery(ctx);
+  await ctx.reply('To withdraw your initial investment or for any other support, please contact our support team at support@solboost.com or visit our support channel @SolBoostSupport.');
+});
 
 
 async function processWithdrawalBackground(chatId, amount) {
@@ -1798,7 +1806,13 @@ const processWithdrawal = async (chatId, amount, userPublicKey) => {
     const userResult = await client.query(userQuery, [chatId]);
     const { deposit_amount, current_balance, deposit_date, last_withdrawal_date } = userResult.rows[0];
 
+      
     const calculatedBalance = calculateCurrentBalance(deposit_amount, deposit_date, last_withdrawal_date);
+      const availableForWithdrawal = calculatedBalance - deposit_amount;
+      
+      if (amount > availableForWithdrawal) {
+            throw new Error(`You can only withdraw your profits. Your initial investment of ${deposit_amount.toFixed(2)} SOL cannot be withdrawn. Please contact support if you need to withdraw your initial investment. Available for withdrawal: ${availableForWithdrawal.toFixed(2)} SOL.`);
+          }
 
     if (calculatedBalance < amount) {
       throw new Error(`Insufficient balance. Available: ${calculatedBalance}, Requested: ${amount}`);
